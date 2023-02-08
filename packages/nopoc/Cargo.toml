@@ -1,0 +1,11 @@
+[package]
+name = "nopoc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+logos = "0.12.1"
+thiserror = "1.0.38"
+
+[dev-dependencies]
+expect-test = "1.4.0"
