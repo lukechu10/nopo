@@ -1,35 +1,37 @@
+use clap::Parser;
 use std::error::Error;
-use std::io::{BufRead, Write};
+use std::path::PathBuf;
 
 pub mod ast;
+pub mod compile;
 pub mod parser;
+pub mod repl;
 pub mod span;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut stdin = std::io::stdin().lock();
-    let mut stdout = std::io::stdout().lock();
-    loop {
-        print!("(nopo) ");
-        stdout.flush()?;
-        let mut line = String::new();
-        stdin.read_line(&mut line)?;
-        let line = line.trim();
-        match line {
-            "" => continue,
-            ".quit" | ".q" => break,
-            _ => {}
-        };
+/// The Nopo CLI.
+#[derive(Debug, Parser)]
+pub struct Args {
+    /// The entrypoint to the program.
+    #[arg(short = 'i', long)]
+    input: Option<PathBuf>,
+}
 
-        let mut parser = parser::Parser::new(line);
-        let root = match parser.parse_root_or_stmt() {
-            Ok(root) => root,
-            Err(err) => {
-                eprintln!("Error: {err}");
-                continue;
-            }
-        };
-        eprintln!("Root: {root:#?}");
+fn main() {
+    match entry() {
+        Ok(_) => {}
+        Err(err) => eprintln!("{err}"),
     }
+}
 
-    Ok(())
+fn entry() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+
+    if let Some(input) = args.input {
+        let package = compile::gather_file_graph(&input)?;
+        let metadata = package.get_metadata();
+        println!("{metadata:#?}");
+        Ok(())
+    } else {
+        repl::start_repl()
+    }
 }

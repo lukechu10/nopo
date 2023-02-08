@@ -41,7 +41,7 @@ impl<T> std::ops::DerefMut for Spanned<T> {
     }
 }
 
-pub fn respan<T>(span: Span, node: T) -> Spanned<T> {
+pub fn spanned<T>(span: Span, node: T) -> Spanned<T> {
     Spanned { node, span }
 }
 
@@ -49,5 +49,9 @@ impl<T> Spanned<T> {
     /// Get the unspanned node.
     pub fn unspan(self) -> T {
         self.node
+    }
+
+    pub fn respan(self, span: Span) -> Self {
+        spanned(span, self.node)
     }
 }

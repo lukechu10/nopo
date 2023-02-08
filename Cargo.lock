@@ -188,6 +188,7 @@ version = "0.1.0"
 name = "nopoc"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "expect-test",
  "logos",
  "thiserror",

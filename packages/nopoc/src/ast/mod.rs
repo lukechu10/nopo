@@ -16,14 +16,35 @@ pub enum RootOrStmt {
     Stmt(Stmt),
 }
 
+/// Attributes can be attached to an item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attributes {
+    pub attrs: Vec<Spanned<Attribute>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub ident: Spanned<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vis {
+    Pub,
+    Priv,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Fn(Spanned<FnItem>),
     Struct(Spanned<StructItem>),
+    Mod(Spanned<ModItem>),
+    Use(Spanned<UseItem>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnItem {
+    pub attrs: Spanned<Attributes>,
+    pub vis: Spanned<Vis>,
     pub ident: Spanned<String>,
     pub args: Spanned<FnArgs>,
     pub ret_ty: Option<Spanned<String>>,
@@ -60,7 +81,7 @@ pub enum Expr {
 
     Binary(Spanned<BinaryExpr>),
     Unary(Spanned<UnaryExpr>),
-    Call(Spanned<CallExpr>),
+    FnCall(Spanned<FnCallExpr>),
 
     LitBool(bool),
     LitInt(i64),
@@ -94,8 +115,13 @@ pub struct UnaryExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CallExpr {
+pub struct FnCallExpr {
     pub callee: Box<Spanned<Expr>>,
+    pub args: Spanned<FnCallArgs>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnCallArgs {
     pub args: Vec<Spanned<Expr>>,
 }
 
@@ -132,6 +158,8 @@ pub struct Binding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructItem {
+    pub attrs: Spanned<Attributes>,
+    pub vis: Spanned<Vis>,
     pub ident: Spanned<String>,
     pub fields: Vec<Spanned<StructField>>,
 }
@@ -140,4 +168,18 @@ pub struct StructItem {
 pub struct StructField {
     pub ident: Spanned<String>,
     pub ty: Spanned<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModItem {
+    pub attrs: Spanned<Attributes>,
+    pub vis: Spanned<Vis>,
+    pub path: Spanned<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseItem {
+    pub attrs: Spanned<Attributes>,
+    pub vis: Spanned<Vis>,
+    pub path: Spanned<String>,
 }

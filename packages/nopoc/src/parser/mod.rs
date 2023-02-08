@@ -4,9 +4,9 @@ use logos::Logos;
 use thiserror::Error;
 
 use crate::ast::*;
-use crate::span::{respan, Span, Spanned};
+use crate::span::{spanned, Span, Spanned};
 
-use self::lexer::{BinOp, Token};
+use self::lexer::{BinOp, PostfixOp, Token, UnaryOp};
 
 pub mod lexer;
 #[cfg(test)]
@@ -30,6 +30,8 @@ pub enum ParseError {
         unexpected: Token,
         expected: Vec<Token>,
     },
+    #[error("expected an item, found {unexpected:?}.")]
+    ExpectedItem { unexpected: Token },
     #[error("expected an expression, found {unexpected:?}.")]
     ExpectedExpr { unexpected: Token },
     #[error("char literal is missing. (Help: Try creating an empty string instead.)")]
@@ -83,8 +85,8 @@ impl Parser {
     }
 
     #[must_use]
-    fn respan<T>(&self, start: SpanStart, node: T) -> Spanned<T> {
-        respan(self.end(start), node)
+    fn finish<T>(&self, start: SpanStart, node: T) -> Spanned<T> {
+        spanned(self.end(start), node)
     }
 
     /// Get the current token.
@@ -111,6 +113,18 @@ impl Parser {
     pub fn peek_next(&self) -> &Token {
         self.tokens
             .get(self.cursor + 1)
+            .map(|x| &x.0)
+            .unwrap_or(&Token::Eof)
+    }
+
+    /// Get the token that is `n` tokens ahead without incrementing the cursor.
+    /// If `n` is 0, this is equivalent to `get_current`.
+    /// If `n` is 1, this is equivalent to `peek_next`.
+    ///
+    /// If `n` is greater than the number of tokens left, [`Token::Eof`] is returned.
+    pub fn peek_nth(&self, n: usize) -> &Token {
+        self.tokens
+            .get(self.cursor + n)
             .map(|x| &x.0)
             .unwrap_or(&Token::Eof)
     }
@@ -149,39 +163,81 @@ impl Parser {
             let root = self.parse_root()?;
             Ok(RootOrStmt::Root(root))
         } else {
-            let stmt = self.parse_stmt_with_semi(false)?.unspan();
+            let stmt = self.parse_stmt()?.unspan();
             Ok(RootOrStmt::Stmt(stmt))
         }
     }
 
+    pub fn parse_attributes(&mut self) -> Result<Spanned<Attributes>> {
+        let start = self.start();
+        let mut attrs = Vec::new();
+        while self.peek_next() == &Token::LBracket {
+            attrs.push(self.parse_attribute()?);
+        }
+        Ok(self.finish(start, Attributes { attrs }))
+    }
+
+    pub fn parse_attribute(&mut self) -> Result<Spanned<Attribute>> {
+        let start = self.start();
+        self.expect(Token::LBracket)?;
+        let ident = self.parse_ident()?;
+        self.expect(Token::RBracket)?;
+        Ok(self.finish(start, Attribute { ident }))
+    }
+
+    pub fn parse_vis(&mut self) -> Result<Spanned<Vis>> {
+        let start = self.start();
+        let vis = match self.peek_next() {
+            Token::KwPub => {
+                let _ = self.get_next();
+                Vis::Pub
+            }
+            _ => Vis::Priv,
+        };
+        Ok(self.finish(start, vis))
+    }
+
     pub fn parse_item(&mut self) -> Result<Spanned<Item>> {
         let start = self.start();
-        match self.peek_next() {
+        let attrs = self.parse_attributes()?;
+        // If we see a visibility keyword, look at the token after that to decide which branch to
+        // parse.
+        let kw = match self.peek_next() {
+            Token::KwPub => self.peek_nth(2),
+            x => x,
+        };
+        match kw {
             Token::KwFn => {
-                let item = self.parse_fn_item()?;
-                Ok(self.respan(start, Item::Fn(item)))
+                let item = self.parse_fn_item(attrs)?;
+                Ok(self.finish(start, Item::Fn(item)))
             }
             Token::KwExtern => {
                 todo!("extern fns");
             }
             Token::KwStruct => {
-                let item = self.parse_struct_item()?;
-                Ok(self.respan(start, Item::Struct(item)))
+                let item = self.parse_struct_item(attrs)?;
+                Ok(self.finish(start, Item::Struct(item)))
             }
             Token::KwEnum => {
                 todo!("enums");
             }
-            _ => Err(self.unexpected(vec![
-                Token::KwFn,
-                Token::KwExtern,
-                Token::KwStruct,
-                Token::KwEnum,
-            ])),
+            Token::KwMod => {
+                let item = self.parse_mod_item(attrs)?;
+                Ok(self.finish(start, Item::Mod(item)))
+            }
+            Token::KwUse => {
+                let item = self.parse_use_item(attrs)?;
+                Ok(self.finish(start, Item::Use(item)))
+            }
+            _ => Err(ParseError::ExpectedItem {
+                unexpected: self.peek_next().clone(),
+            }),
         }
     }
 
-    pub fn parse_fn_item(&mut self) -> Result<Spanned<FnItem>> {
+    pub fn parse_fn_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<FnItem>> {
         let start = self.start();
+        let vis = self.parse_vis()?;
         self.expect(Token::KwFn)?;
         let ident = self.parse_ident()?;
         let args = self.parse_fn_args()?;
@@ -193,9 +249,11 @@ impl Parser {
         };
         let body = self.parse_block_expr()?;
 
-        Ok(self.respan(
+        Ok(self.finish(
             start,
             FnItem {
+                attrs,
+                vis,
                 ident,
                 args,
                 ret_ty,
@@ -216,14 +274,10 @@ impl Parser {
             }
         }
         self.expect(Token::RParen)?;
-        Ok(self.respan(start, FnArgs { args }))
+        Ok(self.finish(start, FnArgs { args }))
     }
 
     pub fn parse_stmt(&mut self) -> Result<Spanned<Stmt>> {
-        self.parse_stmt_with_semi(true)
-    }
-
-    pub fn parse_stmt_with_semi(&mut self, semi_required: bool) -> Result<Spanned<Stmt>> {
         let start = self.start();
         // If we see a control-flow statement, we don't need a semicolon unless the type of the
         // expression is not unit. However, we don't know this until type-checking, so we
@@ -236,19 +290,23 @@ impl Parser {
             Token::KwLet => {
                 let stmt = self.parse_let_stmt()?;
                 self.expect(Token::Semi)?;
-                Ok(self.respan(start, Stmt::Let(stmt)))
+                Ok(self.finish(start, Stmt::Let(stmt)))
             }
             Token::KwReturn => {
                 let expr = self.parse_return_stmt()?;
                 self.expect(Token::Semi)?;
-                Ok(self.respan(start, Stmt::Return(expr)))
+                Ok(self.finish(start, Stmt::Return(expr)))
             }
             _ => {
                 let expr = self.parse_expr()?;
+                // Require semicolons after expressions if it is not the last expression of the
+                // block.
+                let semi_required =
+                    self.peek_next() != &Token::RBrace && self.peek_next() != &Token::Eof;
                 if !defer_semi_check && semi_required {
                     self.expect(Token::Semi)?;
                 }
-                Ok(self.respan(start, Stmt::ExprStmt(expr)))
+                Ok(self.finish(start, Stmt::ExprStmt(expr)))
             }
         }
     }
@@ -259,14 +317,14 @@ impl Parser {
         let binding = self.parse_binding()?;
         self.expect(Token::Eq)?;
         let expr = self.parse_expr()?;
-        Ok(self.respan(start, LetStmt { binding, expr }))
+        Ok(self.finish(start, LetStmt { binding, expr }))
     }
 
     pub fn parse_return_stmt(&mut self) -> Result<Spanned<ReturnStmt>> {
         let start = self.start();
         self.expect(Token::KwReturn)?;
         let expr = self.parse_expr()?;
-        Ok(self.respan(start, ReturnStmt { expr }))
+        Ok(self.finish(start, ReturnStmt { expr }))
     }
 
     pub fn parse_expr(&mut self) -> Result<Spanned<Expr>> {
@@ -278,11 +336,11 @@ impl Parser {
         match self.peek_next() {
             Token::Ident(_) => {
                 let ident = self.parse_ident()?;
-                Ok(self.respan(start, Expr::Ident(ident)))
+                Ok(self.finish(start, Expr::Ident(ident)))
             }
             Token::LBrace => {
                 let block = self.parse_block_expr()?;
-                Ok(self.respan(start, Expr::Block(block)))
+                Ok(self.finish(start, Expr::Block(block)))
             }
             Token::LParen => {
                 let _ = self.get_next();
@@ -292,26 +350,26 @@ impl Parser {
             }
             Token::LitTrue => {
                 let _ = self.get_next();
-                Ok(self.respan(start, Expr::LitBool(true)))
+                Ok(self.finish(start, Expr::LitBool(true)))
             }
             Token::LitFalse => {
                 let _ = self.get_next();
-                Ok(self.respan(start, Expr::LitBool(false)))
+                Ok(self.finish(start, Expr::LitBool(false)))
             }
             Token::LitInt(int) => {
                 let int = *int;
                 let _ = self.get_next();
-                Ok(self.respan(start, Expr::LitInt(int)))
+                Ok(self.finish(start, Expr::LitInt(int)))
             }
             Token::LitFloat(float) => {
                 let float = float.clone();
                 let _ = self.get_next();
-                Ok(self.respan(start, Expr::LitFloat(float)))
+                Ok(self.finish(start, Expr::LitFloat(float)))
             }
             Token::LitStr(str) => {
                 let str = str.clone();
                 let _ = self.get_next();
-                Ok(self.respan(start, Expr::LitStr(str)))
+                Ok(self.finish(start, Expr::LitStr(str)))
             }
             Token::LitChar(str) => {
                 let str = str.clone();
@@ -321,7 +379,24 @@ impl Parser {
                 if chars.next().is_some() {
                     return Err(ParseError::InvalidCharLiteral);
                 }
-                Ok(self.respan(start, Expr::LitChar(char)))
+                Ok(self.finish(start, Expr::LitChar(char)))
+            }
+            tok if UnaryOp::try_from(tok.clone()).is_ok() => {
+                let start = self.start();
+                let op = UnaryOp::try_from(tok.clone()).unwrap();
+                let op = self.finish(start, op);
+                let _ = self.get_next();
+                let expr = self.parse_expr()?;
+                Ok(self.finish(
+                    start,
+                    Expr::Unary(self.finish(
+                        start,
+                        UnaryExpr {
+                            op,
+                            expr: Box::new(expr),
+                        },
+                    )),
+                ))
             }
             _ => Err(ParseError::ExpectedExpr {
                 unexpected: self.peek_next().clone(),
@@ -329,30 +404,55 @@ impl Parser {
         }
     }
 
-    pub fn parse_expr_with_min_bp(&mut self, bp: u32) -> Result<Spanned<Expr>> {
+    pub fn parse_expr_with_min_bp(&mut self, min_bp: u32) -> Result<Spanned<Expr>> {
         let start = self.start();
         let mut lhs = self.parse_primary_expr()?;
 
         loop {
+            // Postfix operator.
+            if let Ok(postfix) = self.peek_next().clone().try_into() {
+                let postfix: PostfixOp = postfix;
+                let (l_bp, ()) = postfix.binding_power();
+                if l_bp < min_bp {
+                    break;
+                }
+                match postfix {
+                    PostfixOp::FnCall => {
+                        let args = self.parse_fn_call_args()?;
+                        lhs = self.finish(
+                            start,
+                            Expr::FnCall(self.finish(
+                                start,
+                                FnCallExpr {
+                                    callee: Box::new(lhs),
+                                    args,
+                                },
+                            )),
+                        );
+                    }
+                }
+            }
+
+            // Binary operator.
             let bin_op_start = self.start();
             let bin_op: BinOp = match self.peek_next().clone().try_into() {
                 Ok(op) => op,
                 Err(_) => break,
             };
             let (l_bp, r_bp) = bin_op.binding_power();
-            if l_bp < bp {
+            if l_bp < min_bp {
                 break;
             }
 
             // Consume the operator.
             let _ = self.get_next();
-            let bin_op = self.respan(bin_op_start, bin_op);
+            let bin_op = self.finish(bin_op_start, bin_op);
 
             // Parse RHS.
             let rhs = self.parse_expr_with_min_bp(r_bp)?;
-            lhs = self.respan(
+            lhs = self.finish(
                 start,
-                Expr::Binary(self.respan(
+                Expr::Binary(self.finish(
                     start,
                     BinaryExpr {
                         lhs: Box::new(lhs),
@@ -372,14 +472,10 @@ impl Parser {
 
         let mut stmts = Vec::new();
         while self.peek_next() != &Token::RBrace {
-            stmts.push(self.parse_stmt_with_semi(false)?);
-            // Require semicolons after expressions if it is not the last expression of the block.
-            if self.peek_next() != &Token::RBrace {
-                self.expect(Token::Semi)?;
-            }
+            stmts.push(self.parse_stmt()?);
         }
         self.expect(Token::RBrace)?;
-        Ok(self.respan(start, BlockExpr { stmts }))
+        Ok(self.finish(start, BlockExpr { stmts }))
     }
 
     pub fn parse_if_expr(&mut self) -> Result<Spanned<IfExpr>> {
@@ -393,7 +489,7 @@ impl Parser {
         } else {
             None
         };
-        Ok(self.respan(
+        Ok(self.finish(
             start,
             IfExpr {
                 cond: Box::new(cond),
@@ -408,7 +504,7 @@ impl Parser {
         self.expect(Token::KwWhile)?;
         let cond = self.parse_expr()?;
         let body = self.parse_block_expr()?;
-        Ok(self.respan(
+        Ok(self.finish(
             start,
             WhileExpr {
                 cond: Box::new(cond),
@@ -424,7 +520,7 @@ impl Parser {
         self.expect(Token::KwIn)?;
         let iter = self.parse_expr()?;
         let body = self.parse_block_expr()?;
-        Ok(self.respan(
+        Ok(self.finish(
             start,
             ForExpr {
                 binding,
@@ -438,21 +534,64 @@ impl Parser {
         let start = self.start();
         self.expect(Token::KwLoop)?;
         let body = self.parse_block_expr()?;
-        Ok(self.respan(start, LoopExpr { body }))
+        Ok(self.finish(start, LoopExpr { body }))
     }
 
-    pub fn parse_struct_item(&mut self) -> Result<Spanned<StructItem>> {
+    pub fn parse_fn_call_args(&mut self) -> Result<Spanned<FnCallArgs>> {
         let start = self.start();
+        self.expect(Token::LParen)?;
+        let mut args = Vec::new();
+        while self.peek_next() != &Token::RParen {
+            args.push(self.parse_expr()?);
+            match self.peek_next() {
+                Token::RParen => break,
+                Token::Comma => {
+                    let _ = self.get_next();
+                    if self.peek_next() == &Token::RParen {
+                        break;
+                    }
+                }
+                _ => {
+                    self.expect(Token::Comma)?;
+                }
+            }
+        }
+        self.expect(Token::RParen)?;
+        Ok(self.finish(start, FnCallArgs { args }))
+    }
+
+    pub fn parse_struct_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<StructItem>> {
+        let start = self.start();
+        let vis = self.parse_vis()?;
         self.expect(Token::KwStruct)?;
         let ident = self.parse_ident()?;
         self.expect(Token::LBrace)?;
         let mut fields = Vec::new();
         while self.peek_next() != &Token::RBrace {
             fields.push(self.parse_struct_field()?);
-            self.expect(Token::Comma)?; // TODO: optional comma after last field.
+            match self.peek_next() {
+                Token::RBrace => break,
+                Token::Comma => {
+                    let _ = self.get_next();
+                    if self.peek_next() == &Token::RBrace {
+                        break;
+                    }
+                }
+                _ => {
+                    self.expect(Token::Comma)?;
+                }
+            }
         }
         self.expect(Token::RBrace)?;
-        Ok(self.respan(start, StructItem { ident, fields }))
+        Ok(self.finish(
+            start,
+            StructItem {
+                attrs,
+                vis,
+                ident,
+                fields,
+            },
+        ))
     }
 
     pub fn parse_struct_field(&mut self) -> Result<Spanned<StructField>> {
@@ -460,7 +599,23 @@ impl Parser {
         let ident = self.parse_ident()?;
         self.expect(Token::Colon)?;
         let ty = self.parse_ident()?;
-        Ok(self.respan(start, StructField { ident, ty }))
+        Ok(self.finish(start, StructField { ident, ty }))
+    }
+
+    pub fn parse_mod_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<ModItem>> {
+        let start = self.start();
+        let vis = self.parse_vis()?;
+        self.expect(Token::KwMod)?;
+        let path = self.parse_ident()?;
+        Ok(self.finish(start, ModItem { attrs, vis, path }))
+    }
+
+    pub fn parse_use_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<UseItem>> {
+        let start = self.start();
+        let vis = self.parse_vis()?;
+        self.expect(Token::KwUse)?;
+        let path = self.parse_ident()?;
+        Ok(self.finish(start, UseItem { attrs, vis, path }))
     }
 
     pub fn peek_ident(&self) -> Result<&str> {
@@ -484,7 +639,7 @@ impl Parser {
             });
         };
         let ident = ident.clone();
-        Ok(self.respan(start, ident))
+        Ok(self.finish(start, ident))
     }
 
     pub fn parse_binding(&mut self) -> Result<Spanned<Binding>> {
@@ -496,6 +651,6 @@ impl Parser {
         } else {
             None
         };
-        Ok(self.respan(start, Binding { ident, ty }))
+        Ok(self.finish(start, Binding { ident, ty }))
     }
 }

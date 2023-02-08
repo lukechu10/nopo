@@ -16,9 +16,7 @@ fn check_item(input: &str, expected: Expect) {
 
 fn check_stmt(input: &str, expected: Expect) {
     let mut parser = Parser::new(input);
-    let stmt = parser
-        .parse_stmt_with_semi(false)
-        .expect("could not parse stmt");
+    let stmt = parser.parse_stmt().expect("could not parse stmt");
     expected.assert_debug_eq(&stmt);
 }
 
@@ -33,6 +31,9 @@ fn b() {}"#,
                 items: [
                     (1..10) Fn(
                         (1..10) FnItem {
+                            attrs: (1..0) Attributes {
+                                attrs: [],
+                            },
                             ident: (4..5) "a",
                             args: (5..7) FnArgs {
                                 args: [],
@@ -45,6 +46,9 @@ fn b() {}"#,
                     ),
                     (11..20) Fn(
                         (11..20) FnItem {
+                            attrs: (11..10) Attributes {
+                                attrs: [],
+                            },
                             ident: (14..15) "b",
                             args: (15..17) FnArgs {
                                 args: [],
@@ -68,6 +72,9 @@ fn test_parse_item() {
         expect![[r#"
             (0..12) Fn(
                 (0..12) FnItem {
+                    attrs: (0..0) Attributes {
+                        attrs: [],
+                    },
                     ident: (3..7) "main",
                     args: (7..9) FnArgs {
                         args: [],
@@ -85,6 +92,9 @@ fn test_parse_item() {
         expect![[r#"
             (0..19) Fn(
                 (0..19) FnItem {
+                    attrs: (0..0) Attributes {
+                        attrs: [],
+                    },
                     ident: (3..6) "foo",
                     args: (6..16) FnArgs {
                         args: [
@@ -104,10 +114,45 @@ fn test_parse_item() {
             )
         "#]],
     );
+    check_item(
+        r#"struct Foo {}"#,
+        expect![[r#"
+            (0..13) Struct(
+                (0..13) StructItem {
+                    attrs: (0..0) Attributes {
+                        attrs: [],
+                    },
+                    ident: (7..10) "Foo",
+                    fields: [],
+                },
+            )
+        "#]],
+    );
+    check_item(
+        r#"struct Foo {
+            bar: i32,
+        }"#,
+        expect![[r#"
+            (0..44) Struct(
+                (0..44) StructItem {
+                    attrs: (0..0) Attributes {
+                        attrs: [],
+                    },
+                    ident: (7..10) "Foo",
+                    fields: [
+                        (25..33) StructField {
+                            ident: (25..28) "bar",
+                            ty: (30..33) "i32",
+                        },
+                    ],
+                },
+            )
+        "#]],
+    );
 }
 
 #[test]
-fn test_parse_lits() {
+fn test_parse_literals() {
     check_stmt(
         r#"true"#,
         expect![[r#"
@@ -274,24 +319,118 @@ fn test_parse_bin_expr() {
             (0..5) ExprStmt(
                 (0..5) Binary(
                     (0..5) BinaryExpr {
-                        lhs: (0..1) Ident(
-                            (0..1) "a",
-                        ),
-                        op: (1..2) Dot,
-                        rhs: (2..5) Binary(
-                            (2..5) BinaryExpr {
-                                lhs: (2..3) Ident(
+                        lhs: (0..3) Binary(
+                            (0..3) BinaryExpr {
+                                lhs: (0..1) Ident(
+                                    (0..1) "a",
+                                ),
+                                op: (1..2) Dot,
+                                rhs: (2..3) Ident(
                                     (2..3) "b",
                                 ),
-                                op: (3..4) Dot,
-                                rhs: (4..5) Ident(
-                                    (4..5) "c",
-                                ),
                             },
+                        ),
+                        op: (3..4) Dot,
+                        rhs: (4..5) Ident(
+                            (4..5) "c",
                         ),
                     },
                 ),
             )
         "#]],
+    );
+}
+
+#[test]
+fn test_parse_fn_call() {
+    check_stmt(
+        r#"foo()"#,
+        expect![[r#"
+        (0..5) ExprStmt(
+            (0..5) FnCall(
+                (0..5) FnCallExpr {
+                    callee: (0..3) Ident(
+                        (0..3) "foo",
+                    ),
+                    args: (3..5) FnCallArgs {
+                        args: [],
+                    },
+                },
+            ),
+        )
+    "#]],
+    );
+    check_stmt(
+        r#"a.foo()"#,
+        expect![[r#"
+        (0..7) ExprStmt(
+            (0..7) FnCall(
+                (0..7) FnCallExpr {
+                    callee: (0..5) Binary(
+                        (0..5) BinaryExpr {
+                            lhs: (0..1) Ident(
+                                (0..1) "a",
+                            ),
+                            op: (1..2) Dot,
+                            rhs: (2..5) Ident(
+                                (2..5) "foo",
+                            ),
+                        },
+                    ),
+                    args: (5..7) FnCallArgs {
+                        args: [],
+                    },
+                },
+            ),
+        )
+    "#]],
+    );
+    check_stmt(
+        r#"foo(a)"#,
+        expect![[r#"
+        (0..6) ExprStmt(
+            (0..6) FnCall(
+                (0..6) FnCallExpr {
+                    callee: (0..3) Ident(
+                        (0..3) "foo",
+                    ),
+                    args: (3..6) FnCallArgs {
+                        args: [
+                            (4..5) Ident(
+                                (4..5) "a",
+                            ),
+                        ],
+                    },
+                },
+            ),
+        )
+    "#]],
+    );
+    check_stmt(
+        r#"foo(a, b, c)"#,
+        expect![[r#"
+        (0..12) ExprStmt(
+            (0..12) FnCall(
+                (0..12) FnCallExpr {
+                    callee: (0..3) Ident(
+                        (0..3) "foo",
+                    ),
+                    args: (3..12) FnCallArgs {
+                        args: [
+                            (4..5) Ident(
+                                (4..5) "a",
+                            ),
+                            (7..8) Ident(
+                                (7..8) "b",
+                            ),
+                            (10..11) Ident(
+                                (10..11) "c",
+                            ),
+                        ],
+                    },
+                },
+            ),
+        )
+    "#]],
     );
 }
