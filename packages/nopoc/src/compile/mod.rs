@@ -1,6 +1,6 @@
 pub mod metadata;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -57,7 +57,7 @@ pub fn parse_file(path: &Path) -> Result<ParsedFile, CompileError> {
 }
 
 /// Represents the module path. The entrypoint module is represented by an empty path.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModPath(Vec<String>);
 
 impl fmt::Display for ModPath {
@@ -79,7 +79,7 @@ impl fmt::Debug for ModPath {
 }
 
 pub struct Package {
-    pub files: HashMap<ModPath, ParsedFile>,
+    pub files: BTreeMap<ModPath, ParsedFile>,
 }
 
 fn get_mod_names(ast: &Root) -> Vec<&str> {
@@ -93,7 +93,7 @@ fn get_mod_names(ast: &Root) -> Vec<&str> {
 }
 
 pub fn gather_file_graph(entry: &Path) -> Result<Package, CompileError> {
-    let mut files = HashMap::new();
+    let mut files = BTreeMap::new();
     let mut queue = vec![(ModPath(Vec::new()), entry.to_path_buf())];
     while let Some((mod_path, fs_path)) = queue.pop() {
         // Check if we've already parsed this file.

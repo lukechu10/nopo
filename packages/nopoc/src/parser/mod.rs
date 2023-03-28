@@ -212,7 +212,8 @@ impl Parser {
                 Ok(self.finish(start, Item::Fn(item)))
             }
             Token::KwExtern => {
-                todo!("extern fns");
+                let item = self.parse_extern_fn_item(attrs)?;
+                Ok(self.finish(start, Item::ExternFn(item)))
             }
             Token::KwStruct => {
                 let item = self.parse_struct_item(attrs)?;
@@ -248,6 +249,7 @@ impl Parser {
             None
         };
         let body = self.parse_block_expr()?;
+        let body = spanned(body.span(), Expr::Block(body));
 
         Ok(self.finish(
             start,
@@ -275,6 +277,35 @@ impl Parser {
         }
         self.expect(Token::RParen)?;
         Ok(self.finish(start, FnArgs { args }))
+    }
+
+    pub fn parse_extern_fn_item(
+        &mut self,
+        attrs: Spanned<Attributes>,
+    ) -> Result<Spanned<ExternFnItem>> {
+        let start = self.start();
+        let vis = self.parse_vis()?;
+        self.expect(Token::KwExtern)?;
+        self.expect(Token::KwFn)?;
+        let ident = self.parse_ident()?;
+        let args = self.parse_fn_args()?;
+        let ret_ty = if self.peek_next() == &Token::RArrow {
+            let _ = self.get_next();
+            Some(self.parse_ident()?)
+        } else {
+            None
+        };
+
+        Ok(self.finish(
+            start,
+            ExternFnItem {
+                attrs,
+                vis,
+                ident,
+                args,
+                ret_ty,
+            },
+        ))
     }
 
     pub fn parse_stmt(&mut self) -> Result<Spanned<Stmt>> {
@@ -483,9 +514,11 @@ impl Parser {
         self.expect(Token::KwIf)?;
         let cond = self.parse_expr()?;
         let then = self.parse_block_expr()?;
+        let then = spanned(then.span(), Expr::Block(then));
         let else_ = if self.peek_next() == &Token::KwElse {
             let _ = self.get_next();
-            Some(self.parse_block_expr()?)
+            let else_ = self.parse_block_expr()?;
+            Some(Box::new(spanned(else_.span(), Expr::Block(else_))))
         } else {
             None
         };
@@ -493,7 +526,7 @@ impl Parser {
             start,
             IfExpr {
                 cond: Box::new(cond),
-                then,
+                then: Box::new(then),
                 else_,
             },
         ))
@@ -504,6 +537,7 @@ impl Parser {
         self.expect(Token::KwWhile)?;
         let cond = self.parse_expr()?;
         let body = self.parse_block_expr()?;
+        let body = Box::new(spanned(body.span(), Expr::Block(body)));
         Ok(self.finish(
             start,
             WhileExpr {
@@ -520,6 +554,7 @@ impl Parser {
         self.expect(Token::KwIn)?;
         let iter = self.parse_expr()?;
         let body = self.parse_block_expr()?;
+        let body = Box::new(spanned(body.span(), Expr::Block(body)));
         Ok(self.finish(
             start,
             ForExpr {
@@ -534,6 +569,7 @@ impl Parser {
         let start = self.start();
         self.expect(Token::KwLoop)?;
         let body = self.parse_block_expr()?;
+        let body = Box::new(spanned(body.span(), Expr::Block(body)));
         Ok(self.finish(start, LoopExpr { body }))
     }
 

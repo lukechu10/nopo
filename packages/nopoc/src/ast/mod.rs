@@ -1,8 +1,11 @@
 //! Abstract Syntax Tree.
 
+pub mod visitor;
+
 use crate::parser::lexer::{BinOp, UnaryOp};
 use crate::span::Spanned;
 
+/// Represents the root of the AST. A source file is composed of a single root node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
     pub items: Vec<Spanned<Item>>,
@@ -27,6 +30,11 @@ pub struct Attribute {
     pub ident: Spanned<String>,
 }
 
+/// Represents the visibility of an item.
+///
+/// There is no keyword for private items because everything is private by default.
+///
+/// In that case, the span of the visibility is empty and is just the start of the item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vis {
     Pub,
@@ -36,6 +44,7 @@ pub enum Vis {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Fn(Spanned<FnItem>),
+    ExternFn(Spanned<ExternFnItem>),
     Struct(Spanned<StructItem>),
     Mod(Spanned<ModItem>),
     Use(Spanned<UseItem>),
@@ -48,12 +57,23 @@ pub struct FnItem {
     pub ident: Spanned<String>,
     pub args: Spanned<FnArgs>,
     pub ret_ty: Option<Spanned<String>>,
-    pub body: Spanned<BlockExpr>,
+    /// The body of the function. Syntaxically, this can only be a [`BlockExpr`] but this field is
+    /// of type [`Expr`] to make it easier to implement the visitor pattern.
+    pub body: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnArgs {
     pub args: Vec<Spanned<Binding>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternFnItem {
+    pub attrs: Spanned<Attributes>,
+    pub vis: Spanned<Vis>,
+    pub ident: Spanned<String>,
+    pub args: Spanned<FnArgs>,
+    pub ret_ty: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,26 +148,26 @@ pub struct FnCallArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfExpr {
     pub cond: Box<Spanned<Expr>>,
-    pub then: Spanned<BlockExpr>,
-    pub else_: Option<Spanned<BlockExpr>>,
+    pub then: Box<Spanned<Expr>>,
+    pub else_: Option<Box<Spanned<Expr>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhileExpr {
     pub cond: Box<Spanned<Expr>>,
-    pub body: Spanned<BlockExpr>,
+    pub body: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForExpr {
     pub binding: Spanned<Binding>,
     pub iter: Box<Spanned<Expr>>,
-    pub body: Spanned<BlockExpr>,
+    pub body: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopExpr {
-    pub body: Spanned<BlockExpr>,
+    pub body: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
