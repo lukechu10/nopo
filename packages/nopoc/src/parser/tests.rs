@@ -3,19 +3,19 @@ use expect_test::{expect, Expect};
 use super::*;
 
 fn check_root(input: &str, expected: Expect) {
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(FileId::DUMMY, input);
     let root = parser.parse_root().expect("could not parse root");
     expected.assert_debug_eq(&root);
 }
 
 fn check_item(input: &str, expected: Expect) {
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(FileId::DUMMY, input);
     let item = parser.parse_item().expect("could not parse item");
     expected.assert_debug_eq(&item);
 }
 
 fn check_stmt(input: &str, expected: Expect) {
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(FileId::DUMMY, input);
     let stmt = parser.parse_stmt().expect("could not parse stmt");
     expected.assert_debug_eq(&stmt);
 }
@@ -34,14 +34,17 @@ fn b() {}"#,
                             attrs: (1..0) Attributes {
                                 attrs: [],
                             },
+                            vis: (1..0) Priv,
                             ident: (4..5) "a",
                             args: (5..7) FnArgs {
                                 args: [],
                             },
                             ret_ty: None,
-                            body: (8..10) BlockExpr {
-                                stmts: [],
-                            },
+                            body: (8..10) Block(
+                                (8..10) BlockExpr {
+                                    stmts: [],
+                                },
+                            ),
                         },
                     ),
                     (11..20) Fn(
@@ -49,14 +52,17 @@ fn b() {}"#,
                             attrs: (11..10) Attributes {
                                 attrs: [],
                             },
+                            vis: (11..10) Priv,
                             ident: (14..15) "b",
                             args: (15..17) FnArgs {
                                 args: [],
                             },
                             ret_ty: None,
-                            body: (18..20) BlockExpr {
-                                stmts: [],
-                            },
+                            body: (18..20) Block(
+                                (18..20) BlockExpr {
+                                    stmts: [],
+                                },
+                            ),
                         },
                     ),
                 ],
@@ -75,14 +81,17 @@ fn test_parse_item() {
                     attrs: (0..0) Attributes {
                         attrs: [],
                     },
+                    vis: (0..0) Priv,
                     ident: (3..7) "main",
                     args: (7..9) FnArgs {
                         args: [],
                     },
                     ret_ty: None,
-                    body: (10..12) BlockExpr {
-                        stmts: [],
-                    },
+                    body: (10..12) Block(
+                        (10..12) BlockExpr {
+                            stmts: [],
+                        },
+                    ),
                 },
             )
         "#]],
@@ -95,6 +104,7 @@ fn test_parse_item() {
                     attrs: (0..0) Attributes {
                         attrs: [],
                     },
+                    vis: (0..0) Priv,
                     ident: (3..6) "foo",
                     args: (6..16) FnArgs {
                         args: [
@@ -107,9 +117,11 @@ fn test_parse_item() {
                         ],
                     },
                     ret_ty: None,
-                    body: (17..19) BlockExpr {
-                        stmts: [],
-                    },
+                    body: (17..19) Block(
+                        (17..19) BlockExpr {
+                            stmts: [],
+                        },
+                    ),
                 },
             )
         "#]],
@@ -122,6 +134,7 @@ fn test_parse_item() {
                     attrs: (0..0) Attributes {
                         attrs: [],
                     },
+                    vis: (0..0) Priv,
                     ident: (7..10) "Foo",
                     fields: [],
                 },
@@ -138,6 +151,7 @@ fn test_parse_item() {
                     attrs: (0..0) Attributes {
                         attrs: [],
                     },
+                    vis: (0..0) Priv,
                     ident: (7..10) "Foo",
                     fields: [
                         (25..33) StructField {

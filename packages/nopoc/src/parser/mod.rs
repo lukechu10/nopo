@@ -4,7 +4,7 @@ use logos::Logos;
 use thiserror::Error;
 
 use crate::ast::*;
-use crate::span::{spanned, Span, Spanned};
+use crate::span::{spanned, FileId, Span, Spanned};
 
 use self::lexer::{BinOp, PostfixOp, Token, UnaryOp};
 
@@ -21,6 +21,8 @@ pub struct Parser {
     /// The first token is a dummy token, so when calling `get_next` for the first time, the first
     /// real token is returned.
     cursor: usize,
+    /// The current file that is being parsed.
+    file_id: FileId,
 }
 
 #[derive(Error, Debug)]
@@ -47,16 +49,20 @@ pub type Result<T, E = ParseError> = std::result::Result<T, E>;
 /// A temporary struct used to store the start of a span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpanStart {
-    start: usize,
+    start: u32,
 }
 
 impl Parser {
-    pub fn new(source: &str) -> Self {
+    pub fn new(file_id: FileId, source: &str) -> Self {
         let tokens = Some((Token::Start, 0..0))
             .into_iter()
             .chain(Token::lexer(source).spanned())
             .collect();
-        Self { tokens, cursor: 0 }
+        Self {
+            tokens,
+            cursor: 0,
+            file_id,
+        }
     }
 
     pub fn eof(&self) -> bool {
@@ -70,17 +76,18 @@ impl Parser {
             .tokens
             .get(self.cursor + 1)
             .map(|x| x.1.start)
-            .unwrap_or(0);
+            .unwrap_or(0) as u32;
         SpanStart { start }
     }
 
     /// Returns a `Span` from a `SpanStart`.
     #[must_use]
     fn end(&self, start: SpanStart) -> Span {
-        let end = self.tokens.get(self.cursor).map(|x| x.1.end).unwrap_or(0);
+        let end = self.tokens.get(self.cursor).map(|x| x.1.end).unwrap_or(0) as u32;
         Span {
             start: start.start,
             end,
+            file_id: self.file_id,
         }
     }
 
@@ -642,8 +649,8 @@ impl Parser {
         let start = self.start();
         let vis = self.parse_vis()?;
         self.expect(Token::KwMod)?;
-        let path = self.parse_ident()?;
-        Ok(self.finish(start, ModItem { attrs, vis, path }))
+        let ident = self.parse_ident()?;
+        Ok(self.finish(start, ModItem { attrs, vis, ident }))
     }
 
     pub fn parse_use_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<UseItem>> {

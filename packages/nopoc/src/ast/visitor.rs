@@ -16,7 +16,7 @@ pub trait Visitor {
         walk_item(self, item)
     }
 
-    fn visit_root(&mut self, root: Root) {
+    fn visit_root(&mut self, root: &Root) {
         for item in &root.items {
             self.visit_item(item)
         }

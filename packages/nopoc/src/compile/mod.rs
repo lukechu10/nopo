@@ -1,14 +1,16 @@
-pub mod metadata;
+pub mod backend;
+pub mod codegen;
+pub mod resolution;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use self::resolution::SymbolResolution;
 use crate::ast::Root;
-
-use self::metadata::PackageMetadata;
+use crate::span::{FileId, FileIdMap};
 
 #[derive(Error, Debug)]
 pub enum CompileError {
@@ -22,8 +24,12 @@ pub enum CompileError {
     CircularModDeclarations,
 }
 
-pub fn compile(entry: &Path) -> Result<Package, CompileError> {
-    gather_file_graph(entry)
+/// The main entry point for compiling nopo source code.
+///
+/// # Params
+/// * `entry` - The path to the entry point file.
+pub fn compile(entry: &Path) -> Result<ParseResult, CompileError> {
+    parse_files_recursive(entry)
 }
 
 /// A file that has been parsed.
@@ -32,12 +38,18 @@ pub struct ParsedFile {
     pub path: PathBuf,
     /// The name of the file without the extension.
     pub name: String,
+    /// The complete source code of the file.
     pub source: String,
     pub ast: Root,
 }
 
 /// Parses a file at the specified path and returns a [`ParsedFile`] result.
-pub fn parse_file(path: &Path) -> Result<ParsedFile, CompileError> {
+///
+/// # Params
+/// * `path` - The path of the file to be parsed.
+/// * `file_id` - The [`FileId`] of the file. This information is inlcuded in the spans produced by
+/// the parser.
+fn parse_file(path: &Path, file_id: FileId) -> Result<ParsedFile, CompileError> {
     let source = std::fs::read_to_string(path)?;
 
     let extension = path.extension().map(|s| s.to_string_lossy().to_string());
@@ -46,7 +58,7 @@ pub fn parse_file(path: &Path) -> Result<ParsedFile, CompileError> {
     }
     let name = path.file_stem().unwrap().to_string_lossy().to_string();
 
-    let mut parser = crate::parser::Parser::new(&source);
+    let mut parser = crate::parser::Parser::new(file_id, &source);
     let ast = parser.parse_root()?;
     Ok(ParsedFile {
         path: path.to_path_buf(),
@@ -59,6 +71,18 @@ pub fn parse_file(path: &Path) -> Result<ParsedFile, CompileError> {
 /// Represents the module path. The entrypoint module is represented by an empty path.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModPath(Vec<String>);
+
+impl ModPath {
+    /// The [`ModPath`] for the entry file.
+    pub fn entry() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn extend(mut self, ident: String) -> Self {
+        self.0.push(ident);
+        self
+    }
+}
 
 impl fmt::Display for ModPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,46 +102,81 @@ impl fmt::Debug for ModPath {
     }
 }
 
-pub struct Package {
-    pub files: BTreeMap<ModPath, ParsedFile>,
+/// Stores all the ASTs.
+pub struct ParseResult {
+    pub files: BTreeMap<FileId, ParsedFile>,
+    pub mod_path_map: BTreeMap<ModPath, FileId>,
+    pub file_id_map: FileIdMap,
+    pub entry_file_id: FileId,
 }
 
+impl ParseResult {
+    /// Get the [`Root`] for the entry file.
+    pub fn get_entry_root(&self) -> &Root {
+        &self.files[&self.entry_file_id].ast
+    }
+}
+
+/// Stores additional information extracted from the AST in various compilation passes.
+pub struct CheckResult {}
+
+/// Get the name of the modules that are declared within this [`Root`].
 fn get_mod_names(ast: &Root) -> Vec<&str> {
     ast.items
         .iter()
         .filter_map(|item| match &**item {
-            crate::ast::Item::Mod(mod_item) => Some(mod_item.path.as_str()),
+            crate::ast::Item::Mod(mod_item) => Some(mod_item.ident.as_str()),
             _ => None,
         })
         .collect()
 }
 
-pub fn gather_file_graph(entry: &Path) -> Result<Package, CompileError> {
+/// Recursively parse all files that can be reached from `entry` (including `entry` itself).
+pub fn parse_files_recursive(entry: &Path) -> Result<ParseResult, CompileError> {
+    let mut mod_paths = BTreeSet::<ModPath>::new();
+    let mut mod_path_map = BTreeMap::new();
     let mut files = BTreeMap::new();
+    let mut file_id_map = FileIdMap::new();
+    let mut entry_file_id = None;
+
+    // A queue of files that are to be parsed. We start with the entry file.
     let mut queue = vec![(ModPath(Vec::new()), entry.to_path_buf())];
+
     while let Some((mod_path, fs_path)) = queue.pop() {
         // Check if we've already parsed this file.
-        if files.contains_key(&mod_path) {
+        if mod_paths.contains(&mod_path) {
             return Err(CompileError::CircularModDeclarations);
         }
 
-        let file = parse_file(&fs_path)?;
-        let file_dir = file
+        let file_id = file_id_map.insert_new_file(fs_path.clone());
+        // Check if `entry_file_id` has been set. If not, this is the entry file so we will set it
+        // now.
+        if entry_file_id == None {
+            entry_file_id = Some(file_id);
+        }
+
+        let parsed_file = parse_file(&fs_path, file_id)?;
+
+        let file_dir = parsed_file
             .path
             .parent()
             .expect("file should have parent directory");
-        let is_main = &file.name == "main";
+        let is_main = &parsed_file.name == "main"; // FIXME: allow nested main mod.
 
         // Get all the mod statements and parse the files they reference.
-        let child_mod_names = get_mod_names(&file.ast);
+        let child_mod_names = get_mod_names(&parsed_file.ast);
         for child_mod_name in child_mod_names {
             let child_fs_name = format!("{child_mod_name}.nopo");
             let child_fs_path: PathBuf = if is_main {
                 [file_dir, Path::new(&child_fs_name)].into_iter().collect()
             } else {
-                [file_dir, Path::new(&file.name), Path::new(&child_fs_name)]
-                    .into_iter()
-                    .collect()
+                [
+                    file_dir,
+                    Path::new(&parsed_file.name),
+                    Path::new(&child_fs_name),
+                ]
+                .into_iter()
+                .collect()
             };
             let child_mod_path = ModPath(
                 mod_path
@@ -130,17 +189,24 @@ pub fn gather_file_graph(entry: &Path) -> Result<Package, CompileError> {
             queue.push((child_mod_path, child_fs_path));
         }
 
-        files.insert(mod_path, file);
+        files.insert(file_id, parsed_file);
+        mod_path_map.insert(mod_path.clone(), file_id);
+        mod_paths.insert(mod_path);
     }
-    Ok(Package { files })
+    Ok(ParseResult {
+        files,
+        mod_path_map,
+        file_id_map,
+        entry_file_id: entry_file_id.expect("should have an entry file"),
+    })
 }
 
-impl Package {
-    pub fn get_metadata(&self) -> PackageMetadata {
-        let mut metadata = PackageMetadata::default();
-        for (mod_path, file) in &self.files {
-            metadata.extract_from_ast(mod_path.clone(), &file.ast);
-        }
-        metadata
+impl ParseResult {
+    pub fn check(&self) -> CheckResult {
+        // Run compilation passes.
+        let mut resolver = SymbolResolution::default();
+        resolver.resolve_top_level_items(self);
+        eprintln!("{resolver:#?}");
+        CheckResult {}
     }
 }

@@ -3,6 +3,8 @@
 use std::error::Error;
 use std::io::{BufRead, Write};
 
+use crate::span::FileId;
+
 pub fn start_repl() -> Result<(), Box<dyn Error>> {
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -18,7 +20,8 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
             _ => {}
         };
 
-        let mut parser = crate::parser::Parser::new(line);
+        let mut parser = crate::parser::Parser::new(FileId::DUMMY, line); // FIXME: Do not use
+                                                                          // FileId::DUMMY
         let root = match parser.parse_root_or_stmt() {
             Ok(root) => root,
             Err(err) => {

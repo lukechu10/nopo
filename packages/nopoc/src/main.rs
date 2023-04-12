@@ -27,9 +27,10 @@ fn entry() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     if let Some(input) = args.input {
-        let package = compile::gather_file_graph(&input)?;
-        let metadata = package.get_metadata();
-        println!("{metadata:#?}");
+        let parse_result = compile::parse_files_recursive(&input)?;
+        
+        parse_result.check();
+        println!("DONE!");
         Ok(())
     } else {
         repl::start_repl()

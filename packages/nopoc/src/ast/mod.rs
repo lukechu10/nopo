@@ -41,6 +41,8 @@ pub enum Vis {
     Priv,
 }
 
+/// An item is a top-level source element. An item can be a function, a struct, a module, or a use
+/// statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Fn(Spanned<FnItem>),
@@ -194,7 +196,7 @@ pub struct StructField {
 pub struct ModItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
-    pub path: Spanned<String>,
+    pub ident: Spanned<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

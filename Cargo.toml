@@ -1,3 +1,8 @@
 [workspace]
-members = ["packages/*"]
+members = [
+	"packages/nopo",
+	"packages/nopo-bc",
+	"packages/nopo-vm",
+	"packages/nopoc",
+]
 default-members = ["packages/nopo"]
