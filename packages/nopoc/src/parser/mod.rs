@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::ast::*;
 use crate::span::{spanned, FileId, Span, Spanned};
 
-use self::lexer::{BinOp, PostfixOp, Token, UnaryOp};
+use self::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
 
 pub mod lexer;
 #[cfg(test)]
@@ -36,6 +36,8 @@ pub enum ParseError {
     ExpectedItem { unexpected: Token },
     #[error("expected an expression, found {unexpected:?}.")]
     ExpectedExpr { unexpected: Token },
+    #[error("expected a type definition, found {unexpected:?}.")]
+    ExpectedTypeDef { unexpected: Token },
     #[error("expected a type, found {unexpected:?}.")]
     ExpectedType { unexpected: Token },
     #[error("enum variant is missing a name.")]
@@ -54,13 +56,6 @@ pub type Result<T, E = ParseError> = std::result::Result<T, E>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpanStart {
     start: u32,
-}
-
-/// A temporary struct used to store the current cursor of the parser. This can be used to
-/// backtrack the parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CursorPos {
-    pos: usize,
 }
 
 impl Parser {
@@ -105,16 +100,6 @@ impl Parser {
     #[must_use]
     fn finish<T>(&self, start: SpanStart, node: T) -> Spanned<T> {
         spanned(self.end(start), node)
-    }
-
-    /// Create a marker at the current position of the cursor to be potentially used in
-    /// backtracking later.
-    fn marker(&self) -> CursorPos {
-        CursorPos { pos: self.cursor }
-    }
-
-    fn backtrack(&mut self, marker: CursorPos) {
-        self.cursor = marker.pos;
     }
 
     /// Get the current token.
@@ -311,7 +296,7 @@ impl Parser {
             ty_params.push(self.parse_type_param()?);
         }
         self.expect(Token::Eq)?;
-        let ty = self.parse_type()?;
+        let def = self.parse_type_def()?;
         Ok(self.finish(
             start,
             TypeItem {
@@ -319,7 +304,7 @@ impl Parser {
                 vis,
                 ident,
                 ty_params,
-                ty,
+                def,
             },
         ))
     }
@@ -330,52 +315,105 @@ impl Parser {
         Ok(self.finish(start, TypeParam { ident }))
     }
 
-    pub fn parse_type(&mut self) -> Result<Spanned<Type>> {
-        self.parse_type_with_enum(true)
+    pub fn parse_type_def(&mut self) -> Result<Spanned<TypeDef>> {
+        let start = self.start();
+        match self.peek_next() {
+            Token::LBrace => {
+                let def = self.parse_record_def()?;
+                Ok(self.finish(start, TypeDef::Record(def)))
+            }
+            Token::Ident(_) => {
+                let def = self.parse_adt_def()?;
+                Ok(self.finish(start, TypeDef::Adt(def)))
+            }
+            token => Err(ParseError::ExpectedTypeDef {
+                unexpected: token.clone(),
+            }),
+        }
     }
 
-    /// Parse a type. If `parse_enum` is `true`, will keep on parsing if a `|` is encountered. If
-    /// `false`, will stop when encountering a `|`.
-    pub fn parse_type_with_enum(&mut self, parse_enum: bool) -> Result<Spanned<Type>> {
+    pub fn parse_record_def(&mut self) -> Result<Spanned<RecordDef>> {
         let start = self.start();
-        let start_marker = self.marker();
-        let starts_with_ident = matches!(self.peek_next(), Token::Ident(_)) && parse_enum;
-        let ty = match self.peek_next() {
-            Token::LParen | Token::LBrace => self.parse_primary_type()?,
-            Token::Ident(_) => {
-                let path = self.parse_path_type()?;
-                self.finish(start, Type::Path(path))
+        self.expect(Token::LBrace)?;
+
+        let mut fields = Vec::new();
+        while let Token::Ident(_) = self.peek_next() {
+            fields.push(self.parse_record_field()?);
+            if self.peek_next() != &Token::Comma {
+                break;
+            } else {
+                self.expect(Token::Comma)?;
             }
-            token => {
-                return Err(ParseError::ExpectedType {
-                    unexpected: token.clone(),
-                })
+        }
+
+        self.expect(Token::RBrace)?;
+
+        Ok(self.finish(start, RecordDef { fields }))
+    }
+
+    pub fn parse_record_type(&mut self) -> Result<Spanned<RecordDef>> {
+        let start = self.start();
+        self.expect(Token::LBrace)?;
+
+        let mut fields = Vec::new();
+        while let Token::Ident(_) = self.peek_next() {
+            fields.push(self.parse_record_field()?);
+        }
+
+        self.expect(Token::RBrace)?;
+
+        Ok(self.finish(start, RecordDef { fields }))
+    }
+
+    pub fn parse_record_field(&mut self) -> Result<Spanned<RecordField>> {
+        let start = self.start();
+        let ident = self.parse_ident()?;
+        self.expect(Token::Colon)?;
+        let ty = self.parse_type()?;
+        Ok(self.finish(
+            start,
+            RecordField {
+                ident,
+                ty: Box::new(ty),
+            },
+        ))
+    }
+
+    pub fn parse_adt_def(&mut self) -> Result<Spanned<AdtDef>> {
+        let start = self.start();
+        let first = self.parse_data_constructor()?;
+        let mut data_constructors = vec![first];
+        while self.peek_next() == &Token::Or {
+            self.expect(Token::Or)?;
+            data_constructors.push(self.parse_data_constructor()?);
+        }
+
+        Ok(self.finish(start, AdtDef { data_constructors }))
+    }
+
+    pub fn parse_data_constructor(&mut self) -> Result<Spanned<DataConstructor>> {
+        let start = self.start();
+        let ident = self.parse_ident()?;
+        let of = if self.peek_next() == &Token::KwOf {
+            self.expect(Token::KwOf)?;
+            let mut of = Vec::new();
+            while self.peek_is_type() {
+                of.push(self.parse_type()?);
             }
+            of
+        } else {
+            Vec::new()
         };
 
-        match self.peek_next() {
-            Token::RArrow => {
-                self.expect(Token::RArrow)?;
-                let ret_ty = self.parse_type()?;
-                Ok(self.finish(
-                    start,
-                    Type::Fn(self.finish(
-                        start,
-                        FnType {
-                            arg_ty: Box::new(ty),
-                            ret_ty: Box::new(ret_ty),
-                        },
-                    )),
-                ))
-            }
-            Token::Or if starts_with_ident => {
-                // Restart from beginning and parse as enum.
-                self.backtrack(start_marker);
-                let ty = self.parse_enum_type()?;
-                Ok(self.finish(start, Type::Enum(ty)))
-            }
-            _ => Ok(ty),
-        }
+        Ok(self.finish(start, DataConstructor { ident, of }))
+    }
+
+    pub fn parse_type(&mut self) -> Result<Spanned<Type>> {
+        self.parse_type_with_min_bp(0)
+    }
+
+    pub fn peek_is_type(&mut self) -> bool {
+        matches!(self.peek_next(), Token::Ident(_) | Token::LParen)
     }
 
     pub fn parse_primary_type(&mut self) -> Result<Spanned<Type>> {
@@ -402,27 +440,61 @@ impl Parser {
                     Ok(ty)
                 }
             }
-            Token::LBrace => {
-                let ty = self.parse_record_type()?;
-                Ok(self.finish(start, Type::Record(ty)))
-            }
             Token::Ident(_) => {
-                let ident = self.parse_ident()?;
-                Ok(self.finish(
-                    start,
-                    Type::Path(self.finish(
-                        start,
-                        PathType {
-                            path: vec![ident],
-                            ty_args: Vec::new(),
-                        },
-                    )),
-                ))
+                let path = self.parse_path_type()?;
+                Ok(self.finish(start, Type::Path(path)))
             }
             _ => Err(ParseError::ExpectedType {
                 unexpected: self.peek_next().clone(),
             }),
         }
+    }
+
+    pub fn parse_type_with_min_bp(&mut self, min_bp: u32) -> Result<Spanned<Type>> {
+        let start = self.start();
+        let mut lhs = self.parse_primary_type()?;
+
+        loop {
+            let op = match self.peek_next() {
+                Token::RArrow => {
+                    self.expect(Token::RArrow)?;
+                    TypeBinOp::Fn
+                }
+                Token::Ident(_) | Token::LParen => TypeBinOp::Apply,
+                _ => break,
+            };
+
+            let (l_bp, r_bp) = op.binding_power();
+            if l_bp < min_bp {
+                break;
+            }
+
+            let rhs = self.parse_type_with_min_bp(r_bp)?;
+            lhs = match op {
+                TypeBinOp::Apply => self.finish(
+                    start,
+                    Type::Constructed(self.finish(
+                        start,
+                        ConstructedType {
+                            constructor: Box::new(lhs),
+                            arg: Box::new(rhs),
+                        },
+                    )),
+                ),
+                TypeBinOp::Fn => self.finish(
+                    start,
+                    Type::Fn(self.finish(
+                        start,
+                        FnType {
+                            arg_ty: Box::new(lhs),
+                            ret_ty: Box::new(rhs),
+                        },
+                    )),
+                ),
+            }
+        }
+
+        Ok(lhs)
     }
 
     pub fn parse_path_type(&mut self) -> Result<Spanned<PathType>> {
@@ -434,67 +506,7 @@ impl Parser {
             path.push(self.parse_ident()?);
         }
 
-        let mut ty_args = Vec::new();
-        while matches!(
-            self.peek_next(),
-            Token::LParen | Token::LBrace | Token::Ident(_)
-        ) {
-            ty_args.push(self.parse_primary_type()?);
-        }
-
-        Ok(self.finish(start, PathType { path, ty_args }))
-    }
-
-    pub fn parse_record_type(&mut self) -> Result<Spanned<RecordType>> {
-        let start = self.start();
-        self.expect(Token::LBrace)?;
-
-        let mut fields = Vec::new();
-        while let Token::Ident(_) = self.peek_next() {
-            fields.push(self.parse_record_field()?);
-        }
-
-        self.expect(Token::RBrace)?;
-
-        Ok(self.finish(start, RecordType { fields }))
-    }
-
-    pub fn parse_record_field(&mut self) -> Result<Spanned<RecordField>> {
-        let start = self.start();
-        let ident = self.parse_ident()?;
-        self.expect(Token::Colon)?;
-        let ty = self.parse_type()?;
-        Ok(self.finish(
-            start,
-            RecordField {
-                ident,
-                ty: Box::new(ty),
-            },
-        ))
-    }
-
-    pub fn parse_enum_type(&mut self) -> Result<Spanned<EnumType>> {
-        let start = self.start();
-        let first = self.parse_enum_variant()?;
-        let mut variants = vec![first];
-        while self.peek_next() == &Token::Or {
-            variants.push(self.parse_enum_variant()?);
-        }
-        Ok(self.finish(start, EnumType { variants }))
-    }
-
-    pub fn parse_enum_variant(&mut self) -> Result<Spanned<EnumVariant>> {
-        let start = self.start();
-        let ident = self.parse_ident()?;
-        let ty = if matches!(
-            self.peek_next(),
-            Token::LParen | Token::LBrace | Token::Ident(_)
-        ) {
-            Some(Box::new(self.parse_type_with_enum(false)?))
-        } else {
-            None
-        };
-        Ok(self.finish(start, EnumVariant { ident, ty }))
+        Ok(self.finish(start, PathType { path }))
     }
 
     pub fn parse_expr(&mut self) -> Result<Spanned<Expr>> {

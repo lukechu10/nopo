@@ -63,39 +63,39 @@ pub struct Param {
 pub struct TypeItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
+    /// Identifier of the type constructor.
     pub ident: Spanned<String>,
     pub ty_params: Vec<Spanned<TypeParam>>,
-    pub ty: Spanned<Type>,
+    pub def: Spanned<TypeDef>,
 }
 
+/// Type parameters for the type constructor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeParam {
     pub ident: Spanned<String>,
 }
 
+/// RHS of a `type` item. A [`TypeItem`] either defines a record type or an ADT (Algebraic Data
+/// Type).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
-    Path(Spanned<PathType>),
-    Fn(Spanned<FnType>),
-    Record(Spanned<RecordType>),
-    Enum(Spanned<EnumType>),
-    Tuple(Spanned<TupleType>),
+pub enum TypeDef {
+    Adt(Spanned<AdtDef>),
+    Record(Spanned<RecordDef>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathType {
-    pub path: Vec<Spanned<String>>,
-    pub ty_args: Vec<Spanned<Type>>,
+pub struct AdtDef {
+    pub data_constructors: Vec<Spanned<DataConstructor>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnType {
-    pub arg_ty: Box<Spanned<Type>>,
-    pub ret_ty: Box<Spanned<Type>>,
+pub struct DataConstructor {
+    pub ident: Spanned<String>,
+    pub of: Vec<Spanned<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordType {
+pub struct RecordDef {
     pub fields: Vec<Spanned<RecordField>>,
 }
 
@@ -105,20 +105,36 @@ pub struct RecordField {
     pub ty: Box<Spanned<Type>>,
 }
 
+/// A reference to a type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumType {
-    pub variants: Vec<Spanned<EnumVariant>>,
+pub enum Type {
+    Path(Spanned<PathType>),
+    Fn(Spanned<FnType>),
+    Tuple(Spanned<TupleType>),
+    /// The result of the application of a type constructor.
+    Constructed(Spanned<ConstructedType>)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumVariant {
-    pub ident: Spanned<String>,
-    pub ty: Option<Box<Spanned<Type>>>,
+pub struct PathType {
+    pub path: Vec<Spanned<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnType {
+    pub arg_ty: Box<Spanned<Type>>,
+    pub ret_ty: Box<Spanned<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TupleType {
     pub fields: Vec<Spanned<Type>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstructedType {
+    pub constructor: Box<Spanned<Type>>,
+    pub arg: Box<Spanned<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

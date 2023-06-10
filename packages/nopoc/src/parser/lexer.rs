@@ -76,6 +76,8 @@ pub enum Token {
     KwLet,
     #[token("type")]
     KwType,
+    #[token("of")]
+    KwOf,
     #[token("if")]
     KwIf,
     #[token("else")]
@@ -251,6 +253,23 @@ impl PostfixOp {
     pub fn binding_power(self) -> (u32, ()) {
         match self {
             PostfixOp::Index => (2000, ()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeBinOp {
+    /// Apply a type to a type constructor.
+    Apply,
+    /// Construct a function type LHS -> RHS.
+    Fn,
+}
+
+impl TypeBinOp {
+    pub fn binding_power(self) -> (u32, u32) {
+        match self {
+            TypeBinOp::Apply => (200, 210),
+            TypeBinOp::Fn => (110, 100),
         }
     }
 }
