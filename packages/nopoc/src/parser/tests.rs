@@ -6,7 +6,7 @@ use super::*;
 fn check_root(input: &str, expect: Expect) {
     let mut parser = Parser::new(FileId::DUMMY, input);
     let root = parser.parse_root().expect("could not parse root");
-    expected.assert_debug_eq(&root);
+    expect.assert_debug_eq(&root);
 }
 
 #[track_caller]
@@ -14,7 +14,7 @@ fn check_expr(input: &str, expect: Expect) {
     let mut parser = Parser::new(FileId::DUMMY, input);
     let expr = parser.parse_expr().expect("could not parse expr");
     assert_eq!(parser.peek_next(), &Token::Eof);
-    expected.assert_debug_eq(&expr);
+    expect.assert_debug_eq(&expr);
 }
 
 #[test]
