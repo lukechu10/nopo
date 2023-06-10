@@ -1,4 +1,17 @@
-//! Symbol resolution.
+//! Symbol resolution and type-checking.
+//!
+//! This happens in phases:
+//!
+//! # Phase 1
+//! Go through the module and collect the identifiers of all let and type items.
+//!
+//! # Phase 2
+//! Now that we know all the names of all the types, we can resolve the bodies of the types
+//! themselves.
+//!
+//! # Phase 3
+//! Now that we know all the bodies of all the types, we can finally resolve the bodies of the let
+//! items.
 
 pub mod scope;
 
@@ -7,60 +20,54 @@ use std::collections::{HashMap, HashSet};
 use la_arena::Idx;
 
 use crate::ast::visitor::{walk_item, Visitor};
-use crate::ast::{Item, LetItem, Root};
+use crate::ast::{Item, ItemId, LetItem, Root};
 use crate::span::{Span, Spanned};
 
 use self::scope::Scope;
 
 use super::{ModPath, ParseResult};
 
-/// A refernece to a [`SymbolData`] allocated inside an arena.
-pub type SymbolId = Idx<SymbolData>;
-
-/// A reference to a [`TypeSymbol`] allocated inside an arena.
-pub type TypeId = Idx<TypeData>;
-
-/// Represents any kind of symbol.
+/// Phase 1: Collect names of all items in module.
 #[derive(Debug)]
-pub struct SymbolData {
-    /// The identifier of the symbol.
+pub struct TypeSymbol {
     pub ident: Spanned<String>,
-    /// The actual information of the symbol.
-    pub kind: SymbolKind,
-    /// The declaration span.
-    pub span: Span,
+    pub id: ItemId,
 }
-
 #[derive(Debug)]
-pub enum SymbolKind {
-    /// A global symbol declaration.
-    Global(LetSymbol),
-    Type(TypeId),
-    Mod(ModSymbol),
-    /// A local variable inside a function body.
-    /// Since those symbols are not visible from outside of the function body in which they are
-    /// declared in, these are only resolved after all global symbols are collected.
-    Let(LetSymbol),
-    /// A dummy value. This is because everything in the global scope can reference anything else
-    /// in the global scope. We must therefore collect all the symbol identifiers first before
-    /// resolving their bodies.
-    Tmp,
+pub struct LetSymbol {
+    pub ident: Spanned<String>,
+    pub id: ItemId,
 }
+pub type TypeSymbolId = Idx<TypeSymbol>;
+pub type LetSymbolId = Idx<LetSymbol>;
 
+/// Phase 2: Resolve type contents.
 #[derive(Debug)]
 pub struct TypeData {
     pub ident: Spanned<String>,
     pub kind: TypeKind,
     pub span: Span,
 }
-
-/// A symbol that is a type.
 #[derive(Debug)]
 pub enum TypeKind {
     Record(RecordSymbol),
     Adt(AdtSymbol),
-    /// A dummy value.
-    Tmp,
+}
+#[derive(Debug)]
+pub struct RecordSymbol {
+    pub fields: HashMap<String, ResolvedType>,
+}
+#[derive(Debug)]
+pub struct AdtSymbol {
+    pub variants: HashSet<String>,
+}
+pub type TypeId = Idx<TypeData>;
+
+/// Phase 3: Resolve let bodies.
+#[derive(Debug)]
+pub struct LetData {
+    pub ident: Spanned<String>,
+    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -68,16 +75,6 @@ pub enum ResolvedType {
     Id(TypeId),
     /// Type could not be resolved.
     Error,
-}
-
-#[derive(Debug)]
-pub struct RecordSymbol {
-    pub fields: HashMap<String, ResolvedType>,
-}
-
-#[derive(Debug)]
-pub struct AdtSymbol {
-    pub variants: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -130,7 +127,7 @@ struct ModSymbolResolutionPass<'a> {
 }
 
 impl<'a> Visitor for ModSymbolResolutionPass<'a> {
-    fn visit_item(&mut self, item: &Spanned<Item>) {
+    fn visit_item(&mut self, idx: ItemId, item: &Spanned<Item>) {
         // Collect all the top-level symbols.
         match &**item {
             Item::Let(Spanned(let_item, span)) => self.top_level_symbols.insert(

@@ -7,12 +7,16 @@ use la_arena::{Arena, Idx};
 use crate::parser::lexer::{BinOp, UnaryOp};
 use crate::span::Spanned;
 
-pub type ItemId = Idx<Spanned<Item>>;
+pub type LetId = Idx<Spanned<LetItem>>;
+pub type TypeId = Idx<Spanned<TypeItem>>;
 
 /// Represents the root of the AST. A source file is composed of a single root node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
-    pub items: Arena<Spanned<Item>>,
+    pub let_items: Arena<Spanned<LetItem>>,
+    pub type_items: Arena<Spanned<TypeItem>>,
+    pub mod_items: Vec<Spanned<ModItem>>,
+    pub use_items: Vec<Spanned<UseItem>>,
 }
 
 /// Attributes can be attached to an item.
@@ -35,16 +39,6 @@ pub struct Attribute {
 pub enum Vis {
     Pub,
     Priv,
-}
-
-/// An item is a top-level source element. An item can be a function, a struct, a module, or a use
-/// statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Item {
-    Let(Spanned<LetItem>),
-    Type(Spanned<TypeItem>),
-    Mod(Spanned<ModItem>),
-    Use(Spanned<UseItem>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

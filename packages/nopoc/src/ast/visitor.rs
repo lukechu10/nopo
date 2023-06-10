@@ -6,14 +6,16 @@ pub trait Visitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         walk_expr(self, expr)
     }
-    fn visit_item(&mut self, item: &Spanned<Item>) {
-        walk_item(self, item)
+
+    fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
+        walk_let_item(self, item)
     }
+    fn visit_type_item(&mut self, _idx: TypeId, _item: &Spanned<TypeItem>) {}
+    fn visit_mod_item(&mut self, _item: &Spanned<ModItem>) {}
+    fn visit_use_item(&mut self, _item: &Spanned<UseItem>) {}
 
     fn visit_root(&mut self, root: &Root) {
-        for (_idx, item) in root.items.iter() {
-            self.visit_item(item)
-        }
+        walk_root(self, root)
     }
 }
 
@@ -63,28 +65,37 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
         }
         Expr::Loop(Spanned(LoopExpr { body }, _)) => visitor.visit_expr(body),
         Expr::Return(Spanned(ReturnExpr { expr }, _)) => visitor.visit_expr(&expr),
-        Expr::Let(Spanned(LetExpr { ident: _, params: _, ret_ty: _, expr, _in }, _)) => {
+        Expr::Let(Spanned(
+            LetExpr {
+                ident: _,
+                params: _,
+                ret_ty: _,
+                expr,
+                _in,
+            },
+            _,
+        )) => {
             visitor.visit_expr(expr);
             visitor.visit_expr(_in);
         }
     }
 }
 
-pub fn walk_item<T: Visitor + ?Sized>(visitor: &mut T, item: &Item) {
-    match item {
-        Item::Let(Spanned(
-            LetItem {
-                attrs: _,
-                vis: _,
-                ident: _,
-                params: _,
-                ret_ty: _,
-                expr,
-            },
-            _,
-        )) => visitor.visit_expr(expr),
-        Item::Type(_) => {}
-        Item::Mod(_) => {}
-        Item::Use(_) => {}
+pub fn walk_root<T: Visitor + ?Sized>(visitor: &mut T, root: &Root) {
+    for (idx, let_item) in root.let_items.iter() {
+        visitor.visit_let_item(idx, let_item);
     }
+    for (idx, type_item) in root.type_items.iter() {
+        visitor.visit_type_item(idx, type_item);
+    }
+    for mod_item in &root.mod_items {
+        visitor.visit_mod_item(mod_item);
+    }
+    for use_item in &root.use_items {
+        visitor.visit_use_item(use_item);
+    }
+}
+
+pub fn walk_let_item<T: Visitor + ?Sized>(visitor: &mut T, item: &LetItem) {
+    visitor.visit_expr(&item.expr);
 }

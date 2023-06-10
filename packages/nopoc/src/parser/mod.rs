@@ -165,11 +165,48 @@ impl Parser {
     }
 
     pub fn parse_root(&mut self) -> Result<Root> {
-        let mut items = Arena::new();
+        let mut let_items = Arena::new();
+        let mut type_items = Arena::new();
+        let mut mod_items = Vec::new();
+        let mut use_items = Vec::new();
         while !self.eof() {
-            items.alloc(self.parse_item()?);
+            let attrs = self.parse_attributes()?;
+            // If we see a visibility keyword, look at the token after that to decide which branch
+            // to parse.
+            let kw = match self.peek_next() {
+                Token::KwPub => self.peek_nth(2),
+                x => x,
+            };
+            match kw {
+                Token::KwLet => {
+                    let item = self.parse_let_item(attrs)?;
+                    let_items.alloc(item);
+                }
+                Token::KwType => {
+                    let item = self.parse_type_item(attrs)?;
+                    type_items.alloc(item);
+                }
+                Token::KwMod => {
+                    let item = self.parse_mod_item(attrs)?;
+                    mod_items.push(item);
+                }
+                Token::KwUse => {
+                    let item = self.parse_use_item(attrs)?;
+                    use_items.push(item);
+                }
+                _ => {
+                    return Err(ParseError::ExpectedItem {
+                        unexpected: self.peek_next().clone(),
+                    })
+                }
+            }
         }
-        Ok(Root { items })
+        Ok(Root {
+            let_items,
+            type_items,
+            mod_items,
+            use_items,
+        })
     }
 
     pub fn parse_attributes(&mut self) -> Result<Spanned<Attributes>> {
@@ -199,38 +236,6 @@ impl Parser {
             _ => Vis::Priv,
         };
         Ok(self.finish(start, vis))
-    }
-
-    pub fn parse_item(&mut self) -> Result<Spanned<Item>> {
-        let start = self.start();
-        let attrs = self.parse_attributes()?;
-        // If we see a visibility keyword, look at the token after that to decide which branch to
-        // parse.
-        let kw = match self.peek_next() {
-            Token::KwPub => self.peek_nth(2),
-            x => x,
-        };
-        match kw {
-            Token::KwLet => {
-                let item = self.parse_let_item(attrs)?;
-                Ok(self.finish(start, Item::Let(item)))
-            }
-            Token::KwType => {
-                let item = self.parse_type_item(attrs)?;
-                Ok(self.finish(start, Item::Type(item)))
-            }
-            Token::KwMod => {
-                let item = self.parse_mod_item(attrs)?;
-                Ok(self.finish(start, Item::Mod(item)))
-            }
-            Token::KwUse => {
-                let item = self.parse_use_item(attrs)?;
-                Ok(self.finish(start, Item::Use(item)))
-            }
-            _ => Err(ParseError::ExpectedItem {
-                unexpected: self.peek_next().clone(),
-            }),
-        }
     }
 
     pub fn parse_let_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<LetItem>> {
@@ -820,7 +825,7 @@ impl Parser {
                 ret_ty,
                 params,
                 expr: Box::new(expr),
-                _in: Box::new(_in)
+                _in: Box::new(_in),
             },
         ))
     }
