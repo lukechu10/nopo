@@ -40,6 +40,8 @@ pub enum Token {
 
     #[token("=")]
     Eq,
+    #[token(":=")]
+    UpdateEq,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -48,11 +50,8 @@ pub enum Token {
     LtEq,
     #[token(">=")]
     GtEq,
-
-    #[token("==")]
-    EqEq,
     #[token("!=")]
-    BangEq,
+    Neq,
 
     #[token("&")]
     And,
@@ -73,16 +72,10 @@ pub enum Token {
     OrOr,
 
     // Keywords
-    #[token("fn")]
-    KwFn,
-    #[token("extern")]
-    KwExtern,
-    #[token("struct")]
-    KwStruct,
-    #[token("enum")]
-    KwEnum,
     #[token("let")]
     KwLet,
+    #[token("type")]
+    KwType,
     #[token("if")]
     KwIf,
     #[token("else")]
@@ -137,23 +130,6 @@ pub enum Token {
     Err,
 }
 
-impl Token {
-    /// Returns `true` if this token is a keyword that starts an item.
-    pub fn is_item_kw(self) -> bool {
-        matches!(
-            self,
-            Token::KwFn
-                | Token::KwExtern
-                | Token::KwStruct
-                | Token::KwEnum
-                | Token::KwMod
-                | Token::KwUse
-                | Token::KwPub
-                | Token::LBracket
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     // Arithmetic
@@ -170,8 +146,8 @@ pub enum BinOp {
     ShiftRight,
     UnsignedShiftRight,
     // Relational
-    EqEq,
-    NotEq,
+    Eq,
+    Neq,
     Lt,
     Gt,
     LtEq,
@@ -179,8 +155,6 @@ pub enum BinOp {
     // Logical
     AndAnd,
     OrOr,
-    // Assignment
-    Eq,
     // Member access
     Dot,
 }
@@ -201,15 +175,14 @@ impl TryFrom<Token> for BinOp {
             Token::ShiftLeft => Ok(BinOp::ShiftLeft),
             Token::ShiftRight => Ok(BinOp::ShiftRight),
             Token::UnsignedShiftRight => Ok(BinOp::UnsignedShiftRight),
-            Token::EqEq => Ok(BinOp::EqEq),
-            Token::BangEq => Ok(BinOp::NotEq),
+            Token::Eq => Ok(BinOp::Eq),
+            Token::Neq => Ok(BinOp::Neq),
             Token::Lt => Ok(BinOp::Lt),
             Token::Gt => Ok(BinOp::Gt),
             Token::LtEq => Ok(BinOp::LtEq),
             Token::GtEq => Ok(BinOp::GtEq),
             Token::AndAnd => Ok(BinOp::AndAnd),
             Token::OrOr => Ok(BinOp::OrOr),
-            Token::Eq => Ok(BinOp::Eq),
             Token::Dot => Ok(BinOp::Dot),
             _ => Err(()),
         }
@@ -219,13 +192,12 @@ impl TryFrom<Token> for BinOp {
 impl BinOp {
     pub fn binding_power(self) -> (u32, u32) {
         match self {
-            BinOp::Eq => (10, 0),
             BinOp::OrOr => (100, 110),
             BinOp::AndAnd => (120, 130),
             BinOp::Or => (200, 210),
             BinOp::Xor => (220, 230),
             BinOp::And => (240, 250),
-            BinOp::EqEq | BinOp::NotEq => (300, 310),
+            BinOp::Eq | BinOp::Neq => (300, 310),
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (400, 410),
             BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::UnsignedShiftRight => (500, 510),
             BinOp::Plus | BinOp::Minus => (1000, 1010),

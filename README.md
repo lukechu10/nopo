@@ -8,7 +8,7 @@ _Root_: _Item_*
 
 _Item_: _LetItem_ | _TypeItem_
 
-_LetItem_: `let` _Ident_ _Arg_* (`->` _Type_)? `=` _Expr_ \
+_LetItem_: `let` _Ident_ _Arg_* (`:` _Type_)? `=` _Expr_ \
 _Arg_: _Ident_ | `(` _Ident_ `:` _Type_ `)`
 
 _TypeItem_: `type` _Ident_ _TypeArg_* `=` _Type_ \

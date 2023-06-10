@@ -11,14 +11,6 @@ pub struct Root {
     pub items: Vec<Spanned<Item>>,
 }
 
-/// Represents either a [`Root`] or a [`Stmt`]. This is used in the REPL interface where both are
-/// allowed at the top-level.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RootOrStmt {
-    Root(Root),
-    Stmt(Stmt),
-}
-
 /// Attributes can be attached to an item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attributes {
@@ -45,65 +37,97 @@ pub enum Vis {
 /// statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
-    Fn(Spanned<FnItem>),
-    ExternFn(Spanned<ExternFnItem>),
-    Struct(Spanned<StructItem>),
+    Let(Spanned<LetItem>),
+    Type(Spanned<TypeItem>),
     Mod(Spanned<ModItem>),
     Use(Spanned<UseItem>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnItem {
+pub struct LetItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
     pub ident: Spanned<String>,
-    pub args: Spanned<FnArgs>,
-    pub ret_ty: Option<Spanned<String>>,
-    /// The body of the function. Syntaxically, this can only be a [`BlockExpr`] but this field is
-    /// of type [`Expr`] to make it easier to implement the visitor pattern.
-    pub body: Spanned<Expr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnArgs {
-    pub args: Vec<Spanned<Binding>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternFnItem {
-    pub attrs: Spanned<Attributes>,
-    pub vis: Spanned<Vis>,
-    pub ident: Spanned<String>,
-    pub args: Spanned<FnArgs>,
-    pub ret_ty: Option<Spanned<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
-    ExprStmt(Spanned<Expr>),
-    Let(Spanned<LetStmt>),
-    Return(Spanned<ReturnStmt>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LetStmt {
-    pub binding: Spanned<Binding>,
+    pub params: Vec<Spanned<Param>>,
+    pub ret_ty: Option<Spanned<Type>>,
     pub expr: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReturnStmt {
-    pub expr: Spanned<Expr>,
+pub struct Param {
+    pub ident: Spanned<String>,
+    pub ty: Option<Spanned<Type>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeItem {
+    pub attrs: Spanned<Attributes>,
+    pub vis: Spanned<Vis>,
+    pub ident: Spanned<String>,
+    pub ty_params: Vec<Spanned<TypeParam>>,
+    pub ty: Spanned<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeParam {
+    pub ident: Spanned<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type {
+    Path(Spanned<PathType>),
+    Fn(Spanned<FnType>),
+    Record(Spanned<RecordType>),
+    Enum(Spanned<EnumType>),
+    Tuple(Spanned<TupleType>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathType {
+    pub path: Vec<Spanned<String>>,
+    pub ty_args: Vec<Spanned<Type>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnType {
+    pub arg_ty: Box<Spanned<Type>>,
+    pub ret_ty: Box<Spanned<Type>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordType {
+    pub fields: Vec<Spanned<RecordField>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordField {
+    pub ident: Spanned<String>,
+    pub ty: Box<Spanned<Type>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumType {
+    pub variants: Vec<Spanned<EnumVariant>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub ident: Spanned<String>,
+    pub ty: Option<Box<Spanned<Type>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TupleType {
+    pub fields: Vec<Spanned<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Ident(Spanned<String>),
+    Path(Spanned<PathExpr>),
     Block(Spanned<BlockExpr>),
 
     Binary(Spanned<BinaryExpr>),
     Unary(Spanned<UnaryExpr>),
-    FnCall(Spanned<FnCallExpr>),
 
     LitBool(bool),
     LitInt(i64),
@@ -116,11 +140,24 @@ pub enum Expr {
     While(Spanned<WhileExpr>),
     For(Spanned<ForExpr>),
     Loop(Spanned<LoopExpr>),
+    Return(Spanned<ReturnExpr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExprStmt {
+    Expr(Expr),
+    Let(LetItem),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathExpr {
+    pub path: Vec<Spanned<String>>,
+    pub args: Vec<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockExpr {
-    pub stmts: Vec<Spanned<Stmt>>,
+    pub stmts: Vec<Spanned<ExprStmt>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,17 +171,6 @@ pub struct BinaryExpr {
 pub struct UnaryExpr {
     pub op: Spanned<UnaryOp>,
     pub expr: Box<Spanned<Expr>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnCallExpr {
-    pub callee: Box<Spanned<Expr>>,
-    pub args: Spanned<FnCallArgs>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnCallArgs {
-    pub args: Vec<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,23 +199,14 @@ pub struct LoopExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnExpr {
+    pub expr: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub ident: Spanned<String>,
     pub ty: Option<Spanned<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StructItem {
-    pub attrs: Spanned<Attributes>,
-    pub vis: Spanned<Vis>,
-    pub ident: Spanned<String>,
-    pub fields: Vec<Spanned<StructField>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StructField {
-    pub ident: Spanned<String>,
-    pub ty: Spanned<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

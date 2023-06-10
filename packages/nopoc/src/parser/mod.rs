@@ -36,6 +36,10 @@ pub enum ParseError {
     ExpectedItem { unexpected: Token },
     #[error("expected an expression, found {unexpected:?}.")]
     ExpectedExpr { unexpected: Token },
+    #[error("expected a type, found {unexpected:?}.")]
+    ExpectedType { unexpected: Token },
+    #[error("enum variant is missing a name.")]
+    EnumVariantMissingName,
     #[error("char literal is missing. (Help: Try creating an empty string instead.)")]
     MissingCharLiteral,
     #[error("char literal is malformed. (Help: Try creating a string instead.)")]
@@ -50,6 +54,13 @@ pub type Result<T, E = ParseError> = std::result::Result<T, E>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpanStart {
     start: u32,
+}
+
+/// A temporary struct used to store the current cursor of the parser. This can be used to
+/// backtrack the parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CursorPos {
+    pos: usize,
 }
 
 impl Parser {
@@ -94,6 +105,16 @@ impl Parser {
     #[must_use]
     fn finish<T>(&self, start: SpanStart, node: T) -> Spanned<T> {
         spanned(self.end(start), node)
+    }
+
+    /// Create a marker at the current position of the cursor to be potentially used in
+    /// backtracking later.
+    fn marker(&self) -> CursorPos {
+        CursorPos { pos: self.cursor }
+    }
+
+    fn backtrack(&mut self, marker: CursorPos) {
+        self.cursor = marker.pos;
     }
 
     /// Get the current token.
@@ -165,16 +186,6 @@ impl Parser {
         Ok(Root { items })
     }
 
-    pub fn parse_root_or_stmt(&mut self) -> Result<RootOrStmt> {
-        if self.peek_next().clone().is_item_kw() {
-            let root = self.parse_root()?;
-            Ok(RootOrStmt::Root(root))
-        } else {
-            let stmt = self.parse_stmt()?.unspan();
-            Ok(RootOrStmt::Stmt(stmt))
-        }
-    }
-
     pub fn parse_attributes(&mut self) -> Result<Spanned<Attributes>> {
         let start = self.start();
         let mut attrs = Vec::new();
@@ -214,20 +225,13 @@ impl Parser {
             x => x,
         };
         match kw {
-            Token::KwFn => {
-                let item = self.parse_fn_item(attrs)?;
-                Ok(self.finish(start, Item::Fn(item)))
+            Token::KwLet => {
+                let item = self.parse_let_item(attrs)?;
+                Ok(self.finish(start, Item::Let(item)))
             }
-            Token::KwExtern => {
-                let item = self.parse_extern_fn_item(attrs)?;
-                Ok(self.finish(start, Item::ExternFn(item)))
-            }
-            Token::KwStruct => {
-                let item = self.parse_struct_item(attrs)?;
-                Ok(self.finish(start, Item::Struct(item)))
-            }
-            Token::KwEnum => {
-                todo!("enums");
+            Token::KwType => {
+                let item = self.parse_type_item(attrs)?;
+                Ok(self.finish(start, Item::Type(item)))
             }
             Token::KwMod => {
                 let item = self.parse_mod_item(attrs)?;
@@ -243,126 +247,251 @@ impl Parser {
         }
     }
 
-    pub fn parse_fn_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<FnItem>> {
+    pub fn parse_let_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<LetItem>> {
         let start = self.start();
         let vis = self.parse_vis()?;
-        self.expect(Token::KwFn)?;
-        let ident = self.parse_ident()?;
-        let args = self.parse_fn_args()?;
-        let ret_ty = if self.peek_next() == &Token::RArrow {
-            let _ = self.get_next();
-            Some(self.parse_ident()?)
-        } else {
-            None
-        };
-        let body = self.parse_block_expr()?;
-        let body = spanned(body.span(), Expr::Block(body));
-
-        Ok(self.finish(
-            start,
-            FnItem {
-                attrs,
-                vis,
-                ident,
-                args,
-                ret_ty,
-                body,
-            },
-        ))
-    }
-
-    pub fn parse_fn_args(&mut self) -> Result<Spanned<FnArgs>> {
-        let start = self.start();
-        self.expect(Token::LParen)?;
-
-        let mut args = Vec::new();
-        while self.peek_next() != &Token::RParen {
-            args.push(self.parse_binding()?);
-            if self.peek_next() == &Token::Comma {
-                let _ = self.get_next();
-            }
-        }
-        self.expect(Token::RParen)?;
-        Ok(self.finish(start, FnArgs { args }))
-    }
-
-    pub fn parse_extern_fn_item(
-        &mut self,
-        attrs: Spanned<Attributes>,
-    ) -> Result<Spanned<ExternFnItem>> {
-        let start = self.start();
-        let vis = self.parse_vis()?;
-        self.expect(Token::KwExtern)?;
-        self.expect(Token::KwFn)?;
-        let ident = self.parse_ident()?;
-        let args = self.parse_fn_args()?;
-        let ret_ty = if self.peek_next() == &Token::RArrow {
-            let _ = self.get_next();
-            Some(self.parse_ident()?)
-        } else {
-            None
-        };
-
-        Ok(self.finish(
-            start,
-            ExternFnItem {
-                attrs,
-                vis,
-                ident,
-                args,
-                ret_ty,
-            },
-        ))
-    }
-
-    pub fn parse_stmt(&mut self) -> Result<Spanned<Stmt>> {
-        let start = self.start();
-        // If we see a control-flow statement, we don't need a semicolon unless the type of the
-        // expression is not unit. However, we don't know this until type-checking, so we
-        // don't check for semi-colon here.
-        let defer_semi_check = matches!(
-            self.peek_next(),
-            Token::KwIf | Token::KwWhile | Token::KwFor | Token::KwLoop
-        );
-        match self.peek_next() {
-            Token::KwLet => {
-                let stmt = self.parse_let_stmt()?;
-                self.expect(Token::Semi)?;
-                Ok(self.finish(start, Stmt::Let(stmt)))
-            }
-            Token::KwReturn => {
-                let expr = self.parse_return_stmt()?;
-                self.expect(Token::Semi)?;
-                Ok(self.finish(start, Stmt::Return(expr)))
-            }
-            _ => {
-                let expr = self.parse_expr()?;
-                // Require semicolons after expressions if it is not the last expression of the
-                // block.
-                let semi_required =
-                    self.peek_next() != &Token::RBrace && self.peek_next() != &Token::Eof;
-                if !defer_semi_check && semi_required {
-                    self.expect(Token::Semi)?;
-                }
-                Ok(self.finish(start, Stmt::ExprStmt(expr)))
-            }
-        }
-    }
-
-    pub fn parse_let_stmt(&mut self) -> Result<Spanned<LetStmt>> {
-        let start = self.start();
         self.expect(Token::KwLet)?;
-        let binding = self.parse_binding()?;
+        let ident = self.parse_ident()?;
+
+        let mut params = Vec::new();
+        while let Token::LParen | Token::Ident(_) = self.peek_next() {
+            params.push(self.parse_param()?);
+        }
+
+        let ret_ty = if self.peek_next() == &Token::Colon {
+            self.expect(Token::Colon);
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
         self.expect(Token::Eq)?;
         let expr = self.parse_expr()?;
-        Ok(self.finish(start, LetStmt { binding, expr }))
+        Ok(self.finish(
+            start,
+            LetItem {
+                attrs,
+                vis,
+                ident,
+                ret_ty,
+                params,
+                expr,
+            },
+        ))
     }
 
-    pub fn parse_return_stmt(&mut self) -> Result<Spanned<ReturnStmt>> {
+    pub fn parse_param(&mut self) -> Result<Spanned<Param>> {
         let start = self.start();
-        self.expect(Token::KwReturn)?;
-        let expr = self.parse_expr()?;
-        Ok(self.finish(start, ReturnStmt { expr }))
+        if self.peek_next() == &Token::LParen {
+            self.expect(Token::LParen)?;
+            let ident = self.parse_ident()?;
+            self.expect(Token::Colon)?;
+            let ty = self.parse_type()?;
+            self.expect(Token::RParen)?;
+            Ok(self.finish(
+                start,
+                Param {
+                    ident,
+                    ty: Some(ty),
+                },
+            ))
+        } else {
+            let ident = self.parse_ident()?;
+            Ok(self.finish(start, Param { ident, ty: None }))
+        }
+    }
+
+    pub fn parse_type_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<TypeItem>> {
+        let start = self.start();
+        let vis = self.parse_vis()?;
+        self.expect(Token::KwType)?;
+        let ident = self.parse_ident()?;
+        let mut ty_params = Vec::new();
+        while let Token::Ident(_) = self.peek_next() {
+            ty_params.push(self.parse_type_param()?);
+        }
+        self.expect(Token::Eq)?;
+        let ty = self.parse_type()?;
+        Ok(self.finish(
+            start,
+            TypeItem {
+                attrs,
+                vis,
+                ident,
+                ty_params,
+                ty,
+            },
+        ))
+    }
+
+    pub fn parse_type_param(&mut self) -> Result<Spanned<TypeParam>> {
+        let start = self.start();
+        let ident = self.parse_ident()?;
+        Ok(self.finish(start, TypeParam { ident }))
+    }
+
+    pub fn parse_type(&mut self) -> Result<Spanned<Type>> {
+        self.parse_type_with_enum(true)
+    }
+
+    /// Parse a type. If `parse_enum` is `true`, will keep on parsing if a `|` is encountered. If
+    /// `false`, will stop when encountering a `|`.
+    pub fn parse_type_with_enum(&mut self, parse_enum: bool) -> Result<Spanned<Type>> {
+        let start = self.start();
+        let start_marker = self.marker();
+        let starts_with_ident = matches!(self.peek_next(), Token::Ident(_)) && parse_enum;
+        let ty = match self.peek_next() {
+            Token::LParen | Token::LBrace => self.parse_primary_type()?,
+            Token::Ident(_) => self.finish(start, Type::Path(self.parse_path_type()?)),
+            token => {
+                return Err(ParseError::ExpectedType {
+                    unexpected: token.clone(),
+                })
+            }
+        };
+
+        match self.peek_next() {
+            Token::RArrow => {
+                self.expect(Token::RArrow)?;
+                let ret_ty = self.parse_type()?;
+                Ok(self.finish(
+                    start,
+                    Type::Fn(self.finish(
+                        start,
+                        FnType {
+                            arg_ty: Box::new(ty),
+                            ret_ty: Box::new(ret_ty),
+                        },
+                    )),
+                ))
+            }
+            Token::Or if starts_with_ident => {
+                // Restart from beginning and parse as enum.
+                self.backtrack(start_marker);
+                let ty = self.parse_enum_type()?;
+                Ok(self.finish(start, Type::Enum(ty)))
+            }
+            _ => Ok(ty),
+        }
+    }
+
+    pub fn parse_primary_type(&mut self) -> Result<Spanned<Type>> {
+        let start = self.start();
+        match self.peek_next() {
+            Token::LParen => {
+                self.expect(Token::LParen);
+                let ty = self.parse_type()?;
+                if self.peek_next() == &Token::Comma {
+                    // Parse a tuple.
+                    self.expect(Token::Comma);
+                    let mut fields = vec![ty];
+                    while matches!(
+                        self.peek_next(),
+                        Token::LParen | Token::LBrace | Token::Ident(_)
+                    ) {
+                        fields.push(self.parse_type()?);
+                    }
+                    self.expect(Token::RParen);
+                    Ok(self.finish(start, Type::Tuple(self.finish(start, TupleType { fields }))))
+                } else {
+                    // This is just a parenthesized type.
+                    self.expect(Token::RParen);
+                    Ok(ty)
+                }
+            }
+            Token::LBrace => {
+                let ty = self.parse_record_type()?;
+                Ok(self.finish(start, Type::Record(ty)))
+            }
+            Token::Ident(_) => {
+                let ident = self.parse_ident()?;
+                Ok(self.finish(
+                    start,
+                    Type::Path(self.finish(
+                        start,
+                        PathType {
+                            path: vec![ident],
+                            ty_args: Vec::new(),
+                        },
+                    )),
+                ))
+            }
+            _ => Err(ParseError::ExpectedType {
+                unexpected: self.peek_next().clone(),
+            }),
+        }
+    }
+
+    pub fn parse_path_type(&mut self) -> Result<Spanned<PathType>> {
+        let start = self.start();
+        let initial = self.parse_ident()?;
+        let mut path = vec![initial];
+        while self.peek_next() == &Token::Dot {
+            self.expect(Token::Dot);
+            path.push(self.parse_ident()?);
+        }
+
+        let mut ty_args = Vec::new();
+        while matches!(
+            self.peek_next(),
+            Token::LParen | Token::LBrace | Token::Ident(_)
+        ) {
+            ty_args.push(self.parse_primary_type()?);
+        }
+
+        Ok(self.finish(start, PathType { path, ty_args }))
+    }
+
+    pub fn parse_record_type(&mut self) -> Result<Spanned<RecordType>> {
+        let start = self.start();
+        self.expect(Token::LBrace)?;
+
+        let mut fields = Vec::new();
+        while let Token::Ident(_) = self.peek_next() {
+            fields.push(self.parse_record_field()?);
+        }
+
+        self.expect(Token::RBrace)?;
+
+        Ok(self.finish(start, RecordType { fields }))
+    }
+
+    pub fn parse_record_field(&mut self) -> Result<Spanned<RecordField>> {
+        let start = self.start();
+        let ident = self.parse_ident()?;
+        self.expect(Token::Colon);
+        let ty = self.parse_type()?;
+        Ok(self.finish(
+            start,
+            RecordField {
+                ident,
+                ty: Box::new(ty),
+            },
+        ))
+    }
+
+    pub fn parse_enum_type(&mut self) -> Result<Spanned<EnumType>> {
+        let start = self.start();
+        let first = self.parse_enum_variant()?;
+        let mut variants = vec![first];
+        while self.peek_next() == &Token::Or {
+            variants.push(self.parse_enum_variant()?);
+        }
+        Ok(self.finish(start, EnumType { variants }))
+    }
+
+    pub fn parse_enum_variant(&mut self) -> Result<Spanned<EnumVariant>> {
+        let start = self.start();
+        let ident = self.parse_ident()?;
+        let ty = if matches!(
+            self.peek_next(),
+            Token::LParen | Token::LBrace | Token::Ident(_)
+        ) {
+            Some(Box::new(self.parse_type_with_enum(false)?))
+        } else {
+            None
+        };
+        Ok(self.finish(start, EnumVariant { ident, ty }))
     }
 
     pub fn parse_expr(&mut self) -> Result<Spanned<Expr>> {
@@ -580,27 +709,11 @@ impl Parser {
         Ok(self.finish(start, LoopExpr { body }))
     }
 
-    pub fn parse_fn_call_args(&mut self) -> Result<Spanned<FnCallArgs>> {
+    pub fn parse_return_expr(&mut self) -> Result<Spanned<ReturnExpr>> {
         let start = self.start();
-        self.expect(Token::LParen)?;
-        let mut args = Vec::new();
-        while self.peek_next() != &Token::RParen {
-            args.push(self.parse_expr()?);
-            match self.peek_next() {
-                Token::RParen => break,
-                Token::Comma => {
-                    let _ = self.get_next();
-                    if self.peek_next() == &Token::RParen {
-                        break;
-                    }
-                }
-                _ => {
-                    self.expect(Token::Comma)?;
-                }
-            }
-        }
-        self.expect(Token::RParen)?;
-        Ok(self.finish(start, FnCallArgs { args }))
+        self.expect(Token::KwReturn)?;
+        let expr = self.parse_expr()?;
+        Ok(self.finish(start, ReturnExpr { expr }))
     }
 
     pub fn parse_struct_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<StructItem>> {
