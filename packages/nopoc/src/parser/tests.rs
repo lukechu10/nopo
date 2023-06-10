@@ -14,12 +14,6 @@ fn check_item(input: &str, expected: Expect) {
     expected.assert_debug_eq(&item);
 }
 
-fn check_stmt(input: &str, expected: Expect) {
-    let mut parser = Parser::new(FileId::DUMMY, input);
-    let stmt = parser.parse_stmt().expect("could not parse stmt");
-    expected.assert_debug_eq(&stmt);
-}
-
 #[test]
 fn test_parse_root() {
     check_root(

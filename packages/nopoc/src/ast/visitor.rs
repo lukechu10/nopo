@@ -64,6 +64,7 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
         Expr::Loop(Spanned(LoopExpr { body }, _)) => visitor.visit_expr(body),
         Expr::Return(Spanned(ReturnExpr { expr }, _)) => visitor.visit_expr(&expr),
         Expr::Let(item) => visitor.visit_item(&Spanned(Item::Let(item.clone()), item.span())),
+        Expr::Type(item) => visitor.visit_item(&Spanned(Item::Type(item.clone()), item.span())),
     }
 }
 

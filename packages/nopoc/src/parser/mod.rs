@@ -517,6 +517,7 @@ impl Parser {
             | Token::KwWhile
             | Token::KwLoop
             | Token::KwLet
+            | Token::KwType
             | Token::KwReturn => true,
             tok if UnaryOp::try_from(tok.clone()).is_ok() => true,
             _ => false,
@@ -593,6 +594,11 @@ impl Parser {
                 let attrs = self.parse_attributes()?;
                 let expr = self.parse_let_item(attrs)?;
                 Ok(self.finish(start, Expr::Let(expr)))
+            }
+            Token::KwType => {
+                let attrs = self.parse_attributes()?;
+                let expr = self.parse_type_item(attrs)?;
+                Ok(self.finish(start, Expr::Type(expr)))
             }
             Token::KwReturn => {
                 let expr = self.parse_return_expr()?;

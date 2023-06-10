@@ -146,6 +146,7 @@ pub enum Expr {
     Return(Spanned<ReturnExpr>),
 
     Let(Spanned<LetItem>),
+    Type(Spanned<TypeItem>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
