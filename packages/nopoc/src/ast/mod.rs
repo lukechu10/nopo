@@ -161,8 +161,7 @@ pub enum Expr {
     Loop(Spanned<LoopExpr>),
     Return(Spanned<ReturnExpr>),
 
-    Let(Spanned<LetItem>),
-    Type(Spanned<TypeItem>),
+    Let(Spanned<LetExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +221,15 @@ pub struct LoopExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReturnExpr {
     pub expr: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetExpr {
+    pub ident: Spanned<String>,
+    pub params: Vec<Spanned<Param>>,
+    pub ret_ty: Option<Spanned<Type>>,
+    pub expr: Box<Spanned<Expr>>,
+    pub _in: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

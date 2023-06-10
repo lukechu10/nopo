@@ -529,7 +529,6 @@ impl Parser {
             | Token::KwWhile
             | Token::KwLoop
             | Token::KwLet
-            | Token::KwType
             | Token::KwReturn => true,
             tok if UnaryOp::try_from(tok.clone()).is_ok() => true,
             _ => false,
@@ -603,14 +602,8 @@ impl Parser {
                 Ok(self.finish(start, Expr::Loop(expr)))
             }
             Token::KwLet => {
-                let attrs = self.parse_attributes()?;
-                let expr = self.parse_let_item(attrs)?;
+                let expr = self.parse_let_expr()?;
                 Ok(self.finish(start, Expr::Let(expr)))
-            }
-            Token::KwType => {
-                let attrs = self.parse_attributes()?;
-                let expr = self.parse_type_item(attrs)?;
-                Ok(self.finish(start, Expr::Type(expr)))
             }
             Token::KwReturn => {
                 let expr = self.parse_return_expr()?;
@@ -790,6 +783,41 @@ impl Parser {
             start,
             ReturnExpr {
                 expr: Box::new(expr),
+            },
+        ))
+    }
+
+    pub fn parse_let_expr(&mut self) -> Result<Spanned<LetExpr>> {
+        let start = self.start();
+        self.expect(Token::KwLet)?;
+        let ident = self.parse_ident()?;
+
+        let mut params = Vec::new();
+        while let Token::LParen | Token::Ident(_) = self.peek_next() {
+            params.push(self.parse_param()?);
+        }
+
+        let ret_ty = if self.peek_next() == &Token::Colon {
+            self.expect(Token::Colon)?;
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        self.expect(Token::Eq)?;
+        let expr = self.parse_expr()?;
+
+        self.expect(Token::KwIn)?;
+        let _in = self.parse_expr()?;
+
+        Ok(self.finish(
+            start,
+            LetExpr {
+                ident,
+                ret_ty,
+                params,
+                expr: Box::new(expr),
+                _in: Box::new(_in)
             },
         ))
     }
