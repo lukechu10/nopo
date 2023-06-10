@@ -20,7 +20,7 @@ use la_arena::{Arena, ArenaMap, Idx};
 use crate::ast::visitor::{walk_expr, walk_let_item, Visitor};
 use crate::ast::{
     BinaryExpr, ConstructedType, Expr, FnType, IdentExpr, LetExpr, LetId, LetItem, PathType, Root,
-    TupleType, Type, TypeDef, TypeId, TypeItem,
+    TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
 };
 use crate::parser::lexer::BinOp;
 use crate::span::{Span, Spanned};
@@ -66,6 +66,7 @@ pub struct ResolveTypeContents {
     idents: CollectIdents,
     pub types: ArenaMap<TypeId, TypeData>,
     current_type_id: Option<TypeId>,
+    current_let_id: Option<LetId>,
     /// Current list of type args in scope.
     current_type_params: Vec<String>,
 }
@@ -75,25 +76,59 @@ impl ResolveTypeContents {
             idents,
             types: ArenaMap::new(),
             current_type_id: None,
+            current_let_id: None,
             current_type_params: Vec::new(),
         }
     }
 
-    pub fn resolve_type(&self, ty: &Type) -> ResolvedType {
+    /// `create_ty_params` should be `true` only when called for the parameter of a let item. This
+    /// will automatically create a new type param instead of producing an error.
+    pub fn resolve_type(&mut self, ty: &Type, create_ty_params: bool) -> ResolvedType {
         // TODO: check modules
         match ty {
             Type::Path(ty) => self.resolve_path_type(ty),
             Type::Fn(Spanned(FnType { arg_ty, ret_ty }, _)) => ResolvedType::Fn {
-                arg: Box::new(self.resolve_type(arg_ty)),
-                ret: Box::new(self.resolve_type(ret_ty)),
+                arg: Box::new(self.resolve_type(arg_ty, create_ty_params)),
+                ret: Box::new(self.resolve_type(ret_ty, create_ty_params)),
             },
-            Type::Tuple(Spanned(TupleType { fields }, _)) => {
-                ResolvedType::Tuple(fields.iter().map(|ty| self.resolve_type(ty)).collect())
-            }
+            Type::Tuple(Spanned(TupleType { fields }, _)) => ResolvedType::Tuple(
+                fields
+                    .iter()
+                    .map(|ty| self.resolve_type(ty, create_ty_params))
+                    .collect(),
+            ),
             Type::Constructed(Spanned(ConstructedType { constructor, arg }, _)) => {
                 ResolvedType::Constructed {
-                    constructor: Box::new(self.resolve_type(constructor)),
-                    arg: Box::new(self.resolve_type(arg)),
+                    constructor: Box::new(self.resolve_type(constructor, create_ty_params)),
+                    arg: Box::new(self.resolve_type(arg, create_ty_params)),
+                }
+            }
+            Type::Param(Spanned(TypeParam { ident }, _)) => {
+                if let Some(param_pos) = self.current_type_params.iter().position(|x| &**ident == x)
+                {
+                    if let Some(constructor) = self.current_type_id {
+                        ResolvedType::TypeParamOnType {
+                            constructor,
+                            param_pos,
+                        }
+                    } else if let Some(item) = self.current_let_id {
+                        ResolvedType::TypeParamOnLet { item, param_pos }
+                    } else {
+                        unreachable!(
+                            "resolve_type can only be called in the context of a let or type item"
+                        );
+                    }
+                } else if create_ty_params {
+                    let param_pos = self.current_type_params.len();
+                    self.current_type_params.push(ident.to_string());
+                    // Can only automatically create a type param on a let.
+                    ResolvedType::TypeParamOnLet {
+                        item: self.current_let_id.unwrap(),
+                        param_pos,
+                    }
+                } else {
+                    eprintln!("unresolved type parameter {ident:?}, TODO: implement diagnostics");
+                    ResolvedType::Err
                 }
             }
         }
@@ -102,17 +137,6 @@ impl ResolveTypeContents {
     fn resolve_path_type(&self, ty: &PathType) -> ResolvedType {
         if ty.path.len() != 1 {
             todo!("modules");
-        }
-        // First check if it is a type param.
-        if let Some(param_pos) = self
-            .current_type_params
-            .iter()
-            .position(|x| &*ty.path[0] == x)
-        {
-            ResolvedType::TypeParam {
-                constructor: self.current_type_id.unwrap(),
-                param_pos,
-            }
         }
         // Lookup type with name ty.path[0]
         else if let Some(id) = self.idents.type_items.get(&*ty.path[0]) {
@@ -136,8 +160,13 @@ pub enum ResolvedType {
         constructor: Box<ResolvedType>,
         arg: Box<ResolvedType>,
     },
-    TypeParam {
+    TypeParamOnType {
         constructor: TypeId,
+        param_pos: usize,
+    },
+    TypeParamOnLet {
+        item: LetId,
+        /// The position where this type parameter appears in the signature of the let item.
         param_pos: usize,
     },
     /// Type could not be resolved.
@@ -179,7 +208,11 @@ impl Visitor for ResolveTypeContents {
                 for variant in &adt.data_constructors {
                     variants.push(AdtVariant {
                         ident: variant.ident.to_string(),
-                        types: variant.of.iter().map(|ty| self.resolve_type(ty)).collect(),
+                        types: variant
+                            .of
+                            .iter()
+                            .map(|ty| self.resolve_type(ty, false))
+                            .collect(),
                     })
                 }
                 TypeKind::Adt(AdtSymbol { variants })
@@ -188,7 +221,7 @@ impl Visitor for ResolveTypeContents {
                 fields: record
                     .fields
                     .iter()
-                    .map(|field| (field.ident.to_string(), self.resolve_type(&field.ty)))
+                    .map(|field| (field.ident.to_string(), self.resolve_type(&field.ty, false)))
                     .collect(),
             }),
         };
@@ -200,6 +233,8 @@ impl Visitor for ResolveTypeContents {
                 span: item.span(),
             },
         );
+        self.current_type_id = None;
+        self.current_type_params.clear();
     }
 }
 
@@ -296,7 +331,8 @@ impl ResolveLetContents {
 }
 
 impl Visitor for ResolveLetContents {
-    fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
+    fn visit_let_item(&mut self, idx: LetId, item: &Spanned<LetItem>) {
+        self.type_contents.current_let_id = Some(idx);
         // Add all the params as bindings in this scope.
         for param in &item.params {
             let binding = self.bindings.alloc(BindingData {
@@ -312,14 +348,17 @@ impl Visitor for ResolveLetContents {
         // Resolve the types of the params and ret.
         for param in &item.params {
             if let Some(ty) = &param.ty {
-                let resolved_ty = self.type_contents.resolve_type(ty);
+                let resolved_ty = self.type_contents.resolve_type(ty, true);
                 self.type_map.insert(ty, resolved_ty);
             }
         }
         if let Some(ret_ty) = &item.ret_ty {
-            let resolved_ty = self.type_contents.resolve_type(ret_ty);
+            let resolved_ty = self.type_contents.resolve_type(ret_ty, true);
             self.type_map.insert(ret_ty, resolved_ty);
         }
+
+        self.type_contents.current_let_id = None;
+        self.type_contents.current_type_params.clear(); // Clear the type params from this let item.
     }
 
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
@@ -347,7 +386,7 @@ impl Visitor for ResolveLetContents {
 
                 // Resolve the types of the params and ret.
                 if let Some(ret_ty) = ret_ty {
-                    let resolved_ty = self.type_contents.resolve_type(ret_ty);
+                    let resolved_ty = self.type_contents.resolve_type(ret_ty, false);
                     self.type_map.insert(ret_ty, resolved_ty);
                 }
             }

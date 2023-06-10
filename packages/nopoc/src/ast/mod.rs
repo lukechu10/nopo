@@ -111,6 +111,7 @@ pub enum Type {
     Tuple(Spanned<TupleType>),
     /// The result of the application of a type constructor.
     Constructed(Spanned<ConstructedType>),
+    Param(Spanned<TypeParam>),
 }
 
 #[derive(Debug, PartialEq, Eq)]

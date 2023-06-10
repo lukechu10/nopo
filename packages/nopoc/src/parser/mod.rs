@@ -300,7 +300,7 @@ impl Parser {
         self.expect(Token::KwType)?;
         let ident = self.parse_ident()?;
         let mut ty_params = Vec::new();
-        while let Token::Ident(_) = self.peek_next() {
+        while self.peek_next() == &Token::Prime {
             ty_params.push(self.parse_type_param()?);
         }
         self.expect(Token::Eq)?;
@@ -319,6 +319,7 @@ impl Parser {
 
     pub fn parse_type_param(&mut self) -> Result<Spanned<TypeParam>> {
         let start = self.start();
+        self.expect(Token::Prime)?;
         let ident = self.parse_ident()?;
         Ok(self.finish(start, TypeParam { ident }))
     }
@@ -421,7 +422,10 @@ impl Parser {
     }
 
     pub fn peek_is_type(&mut self) -> bool {
-        matches!(self.peek_next(), Token::Ident(_) | Token::LParen)
+        matches!(
+            self.peek_next(),
+            Token::Ident(_) | Token::LParen | Token::Prime
+        )
     }
 
     pub fn parse_primary_type(&mut self) -> Result<Spanned<Type>> {
@@ -434,10 +438,7 @@ impl Parser {
                     // Parse a tuple.
                     self.expect(Token::Comma)?;
                     let mut fields = vec![ty];
-                    while matches!(
-                        self.peek_next(),
-                        Token::LParen | Token::LBrace | Token::Ident(_)
-                    ) {
+                    while self.peek_is_type() {
                         fields.push(self.parse_type()?);
                     }
                     self.expect(Token::RParen)?;
@@ -452,6 +453,10 @@ impl Parser {
                 let path = self.parse_path_type()?;
                 Ok(self.finish(start, Type::Path(path)))
             }
+            Token::Prime => {
+                let ty = self.parse_type_param()?;
+                Ok(self.finish(start, Type::Param(ty)))
+            }
             _ => Err(ParseError::ExpectedType {
                 unexpected: self.peek_next().clone(),
             }),
@@ -463,13 +468,13 @@ impl Parser {
         let mut lhs = self.parse_primary_type()?;
 
         loop {
-            let op = match self.peek_next() {
-                Token::RArrow => {
-                    self.expect(Token::RArrow)?;
-                    TypeBinOp::Fn
-                }
-                Token::Ident(_) | Token::LParen => TypeBinOp::Apply,
-                _ => break,
+            let op = if self.peek_next() == &Token::RArrow {
+                self.expect(Token::RArrow)?;
+                TypeBinOp::Fn
+            } else if self.peek_is_type() {
+                TypeBinOp::Apply
+            } else {
+                break;
             };
 
             let (l_bp, r_bp) = op.binding_power();

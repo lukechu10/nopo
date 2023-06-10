@@ -23,6 +23,8 @@ pub enum Token {
     Semi,
     #[token("->")]
     RArrow,
+    #[token("'")]
+    Prime,
 
     // Operators
     #[token("+")]
@@ -120,7 +122,7 @@ pub enum Token {
     LitFloat(String),
     #[regex(r#""(?:[^"]|\\")*""#, |lex| lex.slice()[1..lex.slice().len() - 1].to_string())]
     LitStr(String),
-    #[regex(r#"'([^'\\]|\\.)*'"#, |lex| lex.slice()[1..lex.slice().len() - 1].to_string())]
+    #[regex(r#"'([^'\\]|\\.)'"#, |lex| lex.slice()[1..lex.slice().len() - 1].to_string())]
     LitChar(String),
 
     /// A special token that marks the start of the input.
