@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::io::{BufRead, Write};
 
+use crate::compile::resolution::run_resolution_passes;
 use crate::span::FileId;
 
 pub fn start_repl() -> Result<(), Box<dyn Error>> {
@@ -30,6 +31,7 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
             }
         };
         eprintln!("Root: {root:#?}");
+        run_resolution_passes(&root);
     }
 
     Ok(())

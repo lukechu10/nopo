@@ -800,11 +800,6 @@ impl Parser {
         self.expect(Token::KwLet)?;
         let ident = self.parse_ident()?;
 
-        let mut params = Vec::new();
-        while let Token::LParen | Token::Ident(_) = self.peek_next() {
-            params.push(self.parse_param()?);
-        }
-
         let ret_ty = if self.peek_next() == &Token::Colon {
             self.expect(Token::Colon)?;
             Some(self.parse_type()?)
@@ -823,7 +818,6 @@ impl Parser {
             LetExpr {
                 ident,
                 ret_ty,
-                params,
                 expr: Box::new(expr),
                 _in: Box::new(_in),
             },

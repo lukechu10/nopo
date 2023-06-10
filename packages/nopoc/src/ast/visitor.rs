@@ -68,7 +68,6 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
         Expr::Let(Spanned(
             LetExpr {
                 ident: _,
-                params: _,
                 ret_ty: _,
                 expr,
                 _in,

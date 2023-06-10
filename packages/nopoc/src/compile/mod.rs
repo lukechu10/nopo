@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod codegen;
+pub mod map;
 pub mod resolution;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,9 +9,10 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use self::resolution::SymbolResolution;
 use crate::ast::Root;
 use crate::span::{FileId, FileIdMap};
+
+use self::resolution::run_resolution_passes;
 
 #[derive(Error, Debug)]
 pub enum CompileError {
@@ -122,13 +124,7 @@ pub struct CheckResult {}
 
 /// Get the name of the modules that are declared within this [`Root`].
 fn get_mod_names(ast: &Root) -> Vec<&str> {
-    ast.items
-        .iter()
-        .filter_map(|item| match &**item {
-            crate::ast::Item::Mod(mod_item) => Some(mod_item.ident.as_str()),
-            _ => None,
-        })
-        .collect()
+    ast.mod_items.iter().map(|m| &**m.ident).collect()
 }
 
 /// Recursively parse all files that can be reached from `entry` (including `entry` itself).
@@ -204,9 +200,10 @@ pub fn parse_files_recursive(entry: &Path) -> Result<ParseResult, CompileError> 
 impl ParseResult {
     pub fn check(&self) -> CheckResult {
         // Run compilation passes.
-        let mut resolver = SymbolResolution::default();
-        resolver.resolve_top_level_items(self);
-        eprintln!("{resolver:#?}");
+        // let mut resolver = SymbolResolution::default();
+        // resolver.resolve_top_level_items(self);
+        // eprintln!("{resolver:#?}");
+        run_resolution_passes(self.get_entry_root());
         CheckResult {}
     }
 }

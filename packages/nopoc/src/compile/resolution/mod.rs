@@ -13,35 +13,137 @@
 //! Now that we know all the bodies of all the types, we can finally resolve the bodies of the let
 //! items.
 
-pub mod scope;
+use std::collections::HashMap;
 
-use std::collections::{HashMap, HashSet};
+use la_arena::{Arena, ArenaMap, Idx};
 
-use la_arena::Idx;
-
-use crate::ast::visitor::{walk_item, Visitor};
-use crate::ast::{Item, ItemId, LetItem, Root};
+use crate::ast::visitor::{walk_expr, walk_let_item, Visitor};
+use crate::ast::{
+    BinaryExpr, ConstructedType, Expr, FnType, IdentExpr, LetExpr, LetId, LetItem, PathType, Root,
+    TupleType, Type, TypeDef, TypeId, TypeItem,
+};
+use crate::parser::lexer::BinOp;
 use crate::span::{Span, Spanned};
 
-use self::scope::Scope;
+use super::map::NodeMap;
 
-use super::{ModPath, ParseResult};
+/// Phase 1: Collect names of all items in module. Also checks for duplicate top-level symbols.
+#[derive(Debug, Default)]
+pub struct CollectIdents {
+    pub let_items: HashMap<String, LetId>,
+    pub type_items: HashMap<String, TypeId>,
+}
+impl CollectIdents {
+    fn has_symbol_with_ident(&self, ident: &str) -> bool {
+        self.let_items.get(ident).is_some() || self.type_items.get(ident).is_some()
+    }
+}
 
-/// Phase 1: Collect names of all items in module.
-#[derive(Debug)]
-pub struct TypeSymbol {
-    pub ident: Spanned<String>,
-    pub id: ItemId,
+impl Visitor for CollectIdents {
+    fn visit_let_item(&mut self, idx: LetId, item: &Spanned<LetItem>) {
+        if self.has_symbol_with_ident(&item.ident) {
+            panic!(
+                "symbol with ident {} already exists in this scope",
+                *item.ident
+            );
+        }
+        self.let_items.insert(item.ident.to_string(), idx);
+    }
+    fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
+        if self.has_symbol_with_ident(&item.ident) {
+            panic!(
+                "symbol with ident {} already exists in this scope",
+                *item.ident
+            );
+        }
+        self.type_items.insert(item.ident.to_string(), idx);
+    }
 }
-#[derive(Debug)]
-pub struct LetSymbol {
-    pub ident: Spanned<String>,
-    pub id: ItemId,
-}
-pub type TypeSymbolId = Idx<TypeSymbol>;
-pub type LetSymbolId = Idx<LetSymbol>;
 
 /// Phase 2: Resolve type contents.
+#[derive(Debug)]
+pub struct ResolveTypeContents {
+    idents: CollectIdents,
+    pub types: ArenaMap<TypeId, TypeData>,
+    current_type_id: Option<TypeId>,
+    /// Current list of type args in scope.
+    current_type_params: Vec<String>,
+}
+impl ResolveTypeContents {
+    pub fn new(idents: CollectIdents) -> Self {
+        Self {
+            idents,
+            types: ArenaMap::new(),
+            current_type_id: None,
+            current_type_params: Vec::new(),
+        }
+    }
+
+    pub fn resolve_type(&self, ty: &Type) -> ResolvedType {
+        // TODO: check modules
+        match ty {
+            Type::Path(ty) => self.resolve_path_type(ty),
+            Type::Fn(Spanned(FnType { arg_ty, ret_ty }, _)) => ResolvedType::Fn {
+                arg: Box::new(self.resolve_type(arg_ty)),
+                ret: Box::new(self.resolve_type(ret_ty)),
+            },
+            Type::Tuple(Spanned(TupleType { fields }, _)) => {
+                ResolvedType::Tuple(fields.iter().map(|ty| self.resolve_type(ty)).collect())
+            }
+            Type::Constructed(Spanned(ConstructedType { constructor, arg }, _)) => {
+                ResolvedType::Constructed {
+                    constructor: Box::new(self.resolve_type(constructor)),
+                    arg: Box::new(self.resolve_type(arg)),
+                }
+            }
+        }
+    }
+
+    fn resolve_path_type(&self, ty: &PathType) -> ResolvedType {
+        if ty.path.len() != 1 {
+            todo!("modules");
+        }
+        // First check if it is a type param.
+        if let Some(param_pos) = self
+            .current_type_params
+            .iter()
+            .position(|x| &*ty.path[0] == x)
+        {
+            ResolvedType::TypeParam {
+                constructor: self.current_type_id.unwrap(),
+                param_pos,
+            }
+        }
+        // Lookup type with name ty.path[0]
+        else if let Some(id) = self.idents.type_items.get(&*ty.path[0]) {
+            ResolvedType::Ident(*id)
+        } else {
+            eprintln!("unresolved type {ty:?}, TODO: implement diagnostics");
+            ResolvedType::Err
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ResolvedType {
+    Ident(TypeId),
+    Tuple(Vec<ResolvedType>),
+    Fn {
+        arg: Box<ResolvedType>,
+        ret: Box<ResolvedType>,
+    },
+    Constructed {
+        constructor: Box<ResolvedType>,
+        arg: Box<ResolvedType>,
+    },
+    TypeParam {
+        constructor: TypeId,
+        param_pos: usize,
+    },
+    /// Type could not be resolved.
+    Err,
+}
+/// Data about a type.
 #[derive(Debug)]
 pub struct TypeData {
     pub ident: Spanned<String>,
@@ -59,275 +161,193 @@ pub struct RecordSymbol {
 }
 #[derive(Debug)]
 pub struct AdtSymbol {
-    pub variants: HashSet<String>,
+    pub variants: Vec<AdtVariant>,
 }
-pub type TypeId = Idx<TypeData>;
+#[derive(Debug)]
+pub struct AdtVariant {
+    pub ident: String,
+    pub types: Vec<ResolvedType>,
+}
+
+impl Visitor for ResolveTypeContents {
+    fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
+        self.current_type_id = Some(idx);
+        self.current_type_params = item.ty_params.iter().map(|x| x.ident.to_string()).collect();
+        let kind = match &*item.def {
+            TypeDef::Adt(adt) => {
+                let mut variants = Vec::new();
+                for variant in &adt.data_constructors {
+                    variants.push(AdtVariant {
+                        ident: variant.ident.to_string(),
+                        types: variant.of.iter().map(|ty| self.resolve_type(ty)).collect(),
+                    })
+                }
+                TypeKind::Adt(AdtSymbol { variants })
+            }
+            TypeDef::Record(record) => TypeKind::Record(RecordSymbol {
+                fields: record
+                    .fields
+                    .iter()
+                    .map(|field| (field.ident.to_string(), self.resolve_type(&field.ty)))
+                    .collect(),
+            }),
+        };
+        self.types.insert(
+            idx,
+            TypeData {
+                ident: item.ident.clone(),
+                kind,
+                span: item.span(),
+            },
+        );
+    }
+}
 
 /// Phase 3: Resolve let bodies.
 #[derive(Debug)]
-pub struct LetData {
-    pub ident: Spanned<String>,
-    pub span: Span,
+pub struct ResolveLetContents {
+    type_contents: ResolveTypeContents,
+    bindings: Arena<BindingData>,
+    global_bindings_map: HashMap<LetId, BindingId>,
+    local_bindings_stack: Vec<BindingId>,
+    /// Mapping from identifier and let expressions to the associated [`BindingId`].
+    ///
+    /// If the expression is an identifier, the binding id is the binding which this identifier
+    /// references. If the expression is a `let` expression, the binding id is the binding which is
+    /// created by this expression.
+    expr_bindings_map: NodeMap<Expr, ResolvedBinding>,
+    type_map: NodeMap<Type, ResolvedType>,
 }
 
+type BindingId = Idx<BindingData>;
 #[derive(Debug)]
-pub enum ResolvedType {
-    Id(TypeId),
-    /// Type could not be resolved.
-    Error,
-}
-
-#[derive(Debug)]
-pub struct ModSymbol {
-    pub symbols: HashMap<String, SymbolId>,
-}
-
-#[derive(Debug)]
-pub struct LetSymbol {
+pub struct BindingData {
     pub ident: String,
-    pub param_ty: Vec<ResolvedType>,
-    pub ret_ty: Option<ResolvedType>,
 }
 
-/// Resolves symbols. Also performs type-checking as this is needed for resolving fields/methods.
-#[derive(Debug, Default)]
-pub struct SymbolResolution {
-    pub symbol_arena: la_arena::Arena<SymbolData>,
-    pub type_arena: la_arena::Arena<TypeData>,
+#[derive(Debug)]
+pub enum ResolvedBinding {
+    Ok(BindingId),
+    Err,
 }
 
-impl SymbolResolution {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Resolve all the top-level items. Returns a [`ModSymbol`] containing all the resolved items.
-    pub fn resolve_top_level_items(&mut self, parse_result: &ParseResult) -> ModSymbol {
-        let mut pass = ModSymbolResolutionPass {
-            symbol_arena: &mut self.symbol_arena,
-            type_arena: &mut self.type_arena,
-            top_level_symbols: HashMap::new(),
-            parse_result,
-            mod_path: ModPath::entry(),
-        };
-        pass.visit_root(parse_result.get_entry_root());
-        ModSymbol {
-            symbols: pass.top_level_symbols,
-        }
-    }
-}
-
-/// Resovles symbols in a `mod`, i.e. find out what each identifier is refering to.
-struct ModSymbolResolutionPass<'a> {
-    symbol_arena: &'a mut la_arena::Arena<SymbolData>,
-    type_arena: &'a mut la_arena::Arena<TypeData>,
-    top_level_symbols: HashMap<String, SymbolId>,
-    parse_result: &'a ParseResult,
-    mod_path: ModPath,
-}
-
-impl<'a> Visitor for ModSymbolResolutionPass<'a> {
-    fn visit_item(&mut self, idx: ItemId, item: &Spanned<Item>) {
-        // Collect all the top-level symbols.
-        match &**item {
-            Item::Let(Spanned(let_item, span)) => self.top_level_symbols.insert(
-                let_item.ident.to_string(),
-                self.symbol_arena.alloc(SymbolData {
-                    ident: let_item.ident.clone(),
-                    kind: SymbolKind::Tmp,
-                    span: *span,
-                }),
-            ),
-            Item::Type(Spanned(type_item, span)) => self.top_level_symbols.insert(
-                type_item.ident.to_string(),
-                self.symbol_arena.alloc(SymbolData {
-                    ident: type_item.ident.clone(),
-                    kind: SymbolKind::Tmp,
-                    span: *span,
-                }),
-            ),
-            Item::Mod(Spanned(mod_item, span)) => self.top_level_symbols.insert(
-                mod_item.ident.to_string(),
-                self.symbol_arena.alloc(SymbolData {
-                    ident: mod_item.ident.clone(),
-                    kind: SymbolKind::Tmp,
-                    span: *span,
-                }),
-            ),
-            Item::Use(_) => todo!(),
-        };
-
-        walk_item(self, item);
-    }
-
-    fn visit_root(&mut self, root: &Root) {
-        // Collect all top-level symbols.
-        let mut items = Vec::new();
-        for item in &root.items {
-            self.visit_item(item);
-            // FIXME: do not use this hack to get SymbolId from visit_item.
-            let symbol_id = self
-                .symbol_arena
-                .iter()
-                .last()
-                .expect("visit_item should create a new SymbolId")
-                .0;
-            items.push((item, symbol_id));
+impl ResolveLetContents {
+    pub fn new(type_contents: ResolveTypeContents) -> Self {
+        let mut bindings = Arena::new();
+        let mut global_bindings_map = HashMap::new();
+        // Create a binding for all the global let items.
+        for (ident, idx) in &type_contents.idents.let_items {
+            let binding = bindings.alloc(BindingData {
+                ident: ident.clone(),
+            });
+            global_bindings_map.insert(*idx, binding);
         }
 
-        // Fill out the SymbolKind::Tmp placeholders.
-        self.alloc_type_items(&items);
-
-        let global: HashMap<_, _> = self
-            .symbol_arena
-            .iter()
-            .map(|symbol| (symbol.1.ident.to_string(), symbol.0))
-            .collect();
-        let scope = Scope {
-            global,
-            stack: Vec::new(),
-        };
-
-        self.finish_top_level_items(&items, &scope);
+        Self {
+            type_contents,
+            bindings,
+            global_bindings_map,
+            local_bindings_stack: Vec::new(),
+            expr_bindings_map: NodeMap::default(),
+            type_map: NodeMap::default(),
+        }
     }
-}
 
-impl<'a> ModSymbolResolutionPass<'a> {
-    /// Allocate a new [`TypeData`] for all items that are types.
-    fn alloc_type_items(&mut self, items: &[(&Spanned<Item>, SymbolId)]) {
-        // Replace all type items with temporary type.
-        for &(item, symbol_id) in items {
-            match &**item {
-                Item::Type(_) => {
-                    let symbol_data = &mut self.symbol_arena[symbol_id];
-                    let type_id = self.type_arena.alloc(TypeData {
-                        ident: symbol_data.ident.clone(),
-                        kind: TypeKind::Tmp,
-                        span: symbol_data.span,
-                    });
-                    symbol_data.kind = SymbolKind::Type(type_id);
-                }
-                _ => {}
+    /// Try to resolve a variable binding. If no binding is found, an error is produce and a
+    /// [`ResolvedBinding::Err`] is returned.
+    fn resolve_binding(&self, ident: &str) -> ResolvedBinding {
+        // Check local bindings stack first, going in reverse direction.
+        for &local_binding in self.local_bindings_stack.iter().rev() {
+            if &self.bindings[local_binding].ident == ident {
+                return ResolvedBinding::Ok(local_binding);
             }
         }
+        // Check if binding is in global scope.
+        if let Some(let_id) = self.type_contents.idents.let_items.get(ident) {
+            ResolvedBinding::Ok(self.global_bindings_map[let_id])
+        } else {
+            eprintln!("binding not found, TODO: implement diagnostics");
+            ResolvedBinding::Err
+        }
     }
+}
 
-    // Replace all tmp placeholders.
-    fn finish_top_level_items(&mut self, items: &[(&Spanned<Item>, SymbolId)], scope: &Scope) {
-        for &(item, symbol_id) in items {
-            match &**item {
-                Item::Let(Spanned(
-                    LetItem {
-                        ident,
-                        params,
-                        ret_ty,
-                        ..
-                    },
-                    _,
-                )) => {
-                    let param_ty = params
-                        .iter()
-                        .map(|x| {
-                            let Some(ty) = &x.ty else {
-                                eprintln!("ommited type not allowed in top-level let declaration");
-                                return ResolvedType::Error;
-                            };
-                            let Some(symbol) = self.resolve_ident(scope, ty) else {
-                                eprintln!("could not find type {ty:?}");
-                                return ResolvedType::Error;
-                            };
+impl Visitor for ResolveLetContents {
+    fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
+        // Add all the params as bindings in this scope.
+        for param in &item.params {
+            let binding = self.bindings.alloc(BindingData {
+                ident: param.ident.to_string(),
+            });
+            self.local_bindings_stack.push(binding);
+        }
+        walk_let_item(self, item);
+        for _ in &item.params {
+            self.local_bindings_stack.pop();
+        }
 
-                            if let SymbolKind::Type(ty) = &symbol.kind {
-                                ResolvedType::Id(*ty)
-                            } else {
-                                eprintln!("symbol is not a type"); // FIXME: implement proper diagnostics
-                                ResolvedType::Error
-                            }
-                        })
-                        .collect();
-                    let ret_ty = {
-                        if let Some(ret_ty) = ret_ty {
-                            if let Some(ret_ty) = self.resolve_ident(scope, ret_ty) {
-                                if let SymbolKind::Type(ret_ty) = &ret_ty.kind {
-                                    Some(ResolvedType::Id(*ret_ty))
-                                } else {
-                                    eprintln!("symbol is not a type");
-                                    Some(ResolvedType::Error)
-                                }
-                            } else {
-                                eprintln!("could not find type {ret_ty:?}");
-                                Some(ResolvedType::Error)
-                            }
-                        } else {
-                            None
-                        }
-                    };
-                    self.symbol_arena[symbol_id].kind = SymbolKind::Let(LetSymbol {
-                        ident: ident.to_string(),
-                        param_ty,
-                        ret_ty,
-                    });
-                }
-                Item::Struct(Spanned(struct_item, _)) => {
-                    let fields = struct_item
-                        .fields
-                        .iter()
-                        .map(|x| {
-                            let Some(symbol) = self.resolve_ident(scope, &**x.ty) else {
-                                eprintln!("could not find type {}", x.ty.as_str());
-                                return (x.ident.to_string(), ResolvedType::Error);
-                            };
-
-                            let ty = if let SymbolKind::Type(ty) = &symbol.kind {
-                                ResolvedType::Id(*ty)
-                            } else {
-                                eprintln!("symbol is not a type"); // FIXME: implement proper diagnostics
-                                ResolvedType::Error
-                            };
-                            (x.ident.to_string(), ty)
-                        })
-                        .collect();
-                    let type_id = match self.symbol_arena[symbol_id].kind {
-                        SymbolKind::Type(type_id) => type_id,
-                        _ => unreachable!("SymbolKind should be a Type"),
-                    };
-                    self.type_arena[type_id].kind = TypeKind::Record(RecordSymbol { fields });
-                }
-                Item::Mod(Spanned(mod_item, _)) => {
-                    // Recursively create a new ModSymbolResolutionPass.
-                    let mod_path = self.mod_path.clone().extend(mod_item.ident.to_string());
-                    let file_id = self
-                        .parse_result
-                        .mod_path_map
-                        .get(&mod_path)
-                        .expect("mod should already be parsed");
-                    let root = &self.parse_result.files[file_id].ast;
-                    let mut pass = ModSymbolResolutionPass {
-                        symbol_arena: &mut self.symbol_arena,
-                        type_arena: &mut self.type_arena,
-                        top_level_symbols: HashMap::new(),
-                        parse_result: self.parse_result,
-                        mod_path,
-                    };
-                    pass.visit_root(root);
-                    self.symbol_arena[symbol_id].kind = SymbolKind::Mod(ModSymbol {
-                        symbols: pass.top_level_symbols,
-                    });
-                }
-                Item::Use(_) => todo!(),
+        // Resolve the types of the params and ret.
+        for param in &item.params {
+            if let Some(ty) = &param.ty {
+                let resolved_ty = self.type_contents.resolve_type(ty);
+                self.type_map.insert(ty, resolved_ty);
             }
+        }
+        if let Some(ret_ty) = &item.ret_ty {
+            let resolved_ty = self.type_contents.resolve_type(ret_ty);
+            self.type_map.insert(ret_ty, resolved_ty);
         }
     }
 
-    fn resolve_ident(&self, scope: &Scope, ident: &str) -> Option<&SymbolData> {
-        // Check stack first.
-        for frame in scope.stack.iter().rev() {
-            if *self.symbol_arena[frame.symbol].ident == ident {
-                return Some(&self.symbol_arena[frame.symbol]);
-            }
-        }
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        match &**expr {
+            Expr::Let(Spanned(
+                LetExpr {
+                    ident,
+                    ret_ty,
+                    expr,
+                    _in,
+                },
+                _,
+            )) => {
+                // We cannot access the binding inside the expression itself.
+                self.visit_expr(expr);
+                // No we can add the binding.
+                let binding = self.bindings.alloc(BindingData {
+                    ident: ident.to_string(),
+                });
+                self.expr_bindings_map
+                    .insert(expr, ResolvedBinding::Ok(binding));
+                self.local_bindings_stack.push(binding);
+                self.visit_expr(_in);
+                self.local_bindings_stack.pop();
 
-        // If not found, check global scope.
-        scope.global.get(ident).map(|x| &self.symbol_arena[*x])
+                // Resolve the types of the params and ret.
+                if let Some(ret_ty) = ret_ty {
+                    let resolved_ty = self.type_contents.resolve_type(ret_ty);
+                    self.type_map.insert(ret_ty, resolved_ty);
+                }
+            }
+            Expr::Binary(Spanned(BinaryExpr { lhs, op, rhs: _ }, _)) if **op == BinOp::Dot => {
+                // We only want to visit the LHS of a member access since the RHS will depend on
+                // the type of the LHS.
+                self.visit_expr(lhs);
+            }
+            Expr::Ident(Spanned(IdentExpr { ident }, _)) => {
+                // Lookup the binding for this ident.
+                let resolved_binding = self.resolve_binding(&ident);
+                self.expr_bindings_map.insert(expr, resolved_binding);
+            }
+            _ => walk_expr(self, expr),
+        }
     }
+}
+
+pub fn run_resolution_passes(root: &Root) {
+    let mut collect_idents = CollectIdents::default();
+    collect_idents.visit_root(root);
+    let mut resolve_type_contents = ResolveTypeContents::new(collect_idents);
+    resolve_type_contents.visit_root(root);
+    let mut resolve_let_contents = ResolveLetContents::new(resolve_type_contents);
+    resolve_let_contents.visit_root(root);
 }
