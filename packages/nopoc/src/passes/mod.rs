@@ -1,5 +1,3 @@
-pub mod backend;
-pub mod codegen;
 pub mod map;
 pub mod resolution;
 
@@ -199,10 +197,6 @@ pub fn parse_files_recursive(entry: &Path) -> Result<ParseResult, CompileError> 
 
 impl ParseResult {
     pub fn check(&self) -> CheckResult {
-        // Run compilation passes.
-        // let mut resolver = SymbolResolution::default();
-        // resolver.resolve_top_level_items(self);
-        // eprintln!("{resolver:#?}");
         run_resolution_passes(self.get_entry_root());
         CheckResult {}
     }

@@ -80,6 +80,8 @@ pub enum Token {
     KwOf,
     #[token("if")]
     KwIf,
+    #[token("then")]
+    KwThen,
     #[token("else")]
     KwElse,
     #[token("while")]

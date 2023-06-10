@@ -2,9 +2,11 @@ use clap::Parser;
 use std::error::Error;
 use std::path::PathBuf;
 
+use crate::passes::parse_files_recursive;
+
 pub mod ast;
-pub mod compile;
 pub mod parser;
+pub mod passes;
 pub mod repl;
 pub mod span;
 
@@ -27,13 +29,9 @@ fn entry() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     if let Some(input) = args.input {
-        // let parse_result = compile::parse_files_recursive(&input)?;
-        let input = std::fs::read_to_string(input)?;
-        let mut parser = parser::Parser::new(span::FileId::DUMMY, &input);
-        dbg!(parser.parse_root()?);
-
-        // parse_result.check();
-        // println!("DONE!");
+        let parse_result = parse_files_recursive(&input)?;
+        parse_result.check();
+        println!("Compiled successfully!");
         Ok(())
     } else {
         repl::start_repl()

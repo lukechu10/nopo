@@ -208,7 +208,8 @@ impl Visitor for ResolveTypeContents {
 pub struct ResolveLetContents {
     type_contents: ResolveTypeContents,
     bindings: Arena<BindingData>,
-    global_bindings_map: HashMap<LetId, BindingId>,
+    pub global_bindings_map: HashMap<LetId, BindingId>,
+    global_bindings: Vec<BindingId>,
     local_bindings_stack: Vec<BindingId>,
     /// Mapping from identifier and let expressions to the associated [`BindingId`].
     ///
@@ -235,18 +236,36 @@ impl ResolveLetContents {
     pub fn new(type_contents: ResolveTypeContents) -> Self {
         let mut bindings = Arena::new();
         let mut global_bindings_map = HashMap::new();
+        let mut global_bindings = Vec::new();
+
         // Create a binding for all the global let items.
         for (ident, idx) in &type_contents.idents.let_items {
             let binding = bindings.alloc(BindingData {
                 ident: ident.clone(),
             });
             global_bindings_map.insert(*idx, binding);
+            global_bindings.push(binding);
+        }
+        // Create a binding for all data constructors.
+        for (_idx, type_data) in type_contents.types.iter() {
+            match &type_data.kind {
+                TypeKind::Adt(adt) => {
+                    for variant in &adt.variants {
+                        let binding = bindings.alloc(BindingData {
+                            ident: variant.ident.clone(),
+                        });
+                        global_bindings.push(binding);
+                    }
+                }
+                _ => {}
+            }
         }
 
         Self {
             type_contents,
             bindings,
             global_bindings_map,
+            global_bindings,
             local_bindings_stack: Vec::new(),
             expr_bindings_map: NodeMap::default(),
             type_map: NodeMap::default(),
@@ -263,10 +282,14 @@ impl ResolveLetContents {
             }
         }
         // Check if binding is in global scope.
-        if let Some(let_id) = self.type_contents.idents.let_items.get(ident) {
-            ResolvedBinding::Ok(self.global_bindings_map[let_id])
+        if let Some(binding) = self
+            .global_bindings
+            .iter()
+            .find(|idx| self.bindings[**idx].ident == ident)
+        {
+            ResolvedBinding::Ok(*binding)
         } else {
-            eprintln!("binding not found, TODO: implement diagnostics");
+            eprintln!("binding `{ident}` not found, TODO: implement diagnostics");
             ResolvedBinding::Err
         }
     }

@@ -140,6 +140,8 @@ pub enum Expr {
     Ident(Spanned<IdentExpr>),
 
     Block(Spanned<BlockExpr>),
+    Tuple(Spanned<TupleExpr>),
+    Record(Spanned<RecordExpr>),
 
     Binary(Spanned<BinaryExpr>),
     Unary(Spanned<UnaryExpr>),
@@ -172,6 +174,24 @@ pub struct BlockExpr {
     pub exprs: Vec<Spanned<Expr>>,
 }
 
+/// A tuple expression. A tuple with only one element should be represented as just an expression
+/// without the tuple.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TupleExpr {
+    pub elements: Vec<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecordExpr {
+    pub fields: Vec<Spanned<RecordFieldExpr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecordFieldExpr {
+    pub ident: Spanned<String>,
+    pub expr: Spanned<Expr>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct BinaryExpr {
     pub lhs: Box<Spanned<Expr>>,
@@ -195,7 +215,7 @@ pub struct IndexExpr {
 pub struct IfExpr {
     pub cond: Box<Spanned<Expr>>,
     pub then: Box<Spanned<Expr>>,
-    pub else_: Option<Box<Spanned<Expr>>>,
+    pub else_: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

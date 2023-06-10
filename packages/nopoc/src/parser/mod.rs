@@ -551,13 +551,20 @@ impl Parser {
                 Ok(self.finish(start, Expr::Ident(self.finish(start, IdentExpr { ident }))))
             }
             Token::LBrace => {
-                let block = self.parse_block_expr()?;
-                Ok(self.finish(start, Expr::Block(block)))
+                // We need to check if this is a block expression or record expression.
+                match (self.peek_nth(2), self.peek_nth(3)) {
+                    (Token::Ident(_), Token::Eq) => {
+                        let record_expr = self.parse_record_expr()?;
+                        Ok(self.finish(start, Expr::Record(record_expr)))
+                    }
+                    _ => {
+                        let block = self.parse_block_expr()?;
+                        Ok(self.finish(start, Expr::Block(block)))
+                    }
+                }
             }
             Token::LParen => {
-                let _ = self.get_next();
-                let expr = self.parse_expr()?;
-                self.expect(Token::RParen)?;
+                let expr = self.parse_tuple_expr()?;
                 Ok(expr)
             }
             Token::LitTrue => {
@@ -719,25 +726,66 @@ impl Parser {
         Ok(self.finish(start, BlockExpr { exprs }))
     }
 
+    pub fn parse_tuple_expr(&mut self) -> Result<Spanned<Expr>> {
+        let start = self.start();
+        self.expect(Token::LParen)?;
+        let mut elements = Vec::new();
+        while self.peek_is_expr() {
+            elements.push(self.parse_expr()?);
+            if self.peek_next() != &Token::Comma {
+                break;
+            } else {
+                self.expect(Token::Comma)?;
+            }
+        }
+        self.expect(Token::RParen)?;
+        match elements.len() {
+            1 => Ok(elements.into_iter().next().unwrap()),
+            _ => Ok(self.finish(
+                start,
+                Expr::Tuple(self.finish(start, TupleExpr { elements })),
+            )),
+        }
+    }
+
+    pub fn parse_record_expr(&mut self) -> Result<Spanned<RecordExpr>> {
+        let start = self.start();
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+        while let Token::Ident(_) = self.peek_next() {
+            fields.push(self.parse_record_field_expr()?);
+            if self.peek_next() != &Token::Comma {
+                break;
+            } else {
+                self.expect(Token::Comma)?;
+            }
+        }
+        self.expect(Token::RBrace)?;
+        Ok(self.finish(start, RecordExpr { fields }))
+    }
+
+    pub fn parse_record_field_expr(&mut self) -> Result<Spanned<RecordFieldExpr>> {
+        let start = self.start();
+        let ident = self.parse_ident()?;
+        self.expect(Token::Eq)?;
+        let expr = self.parse_expr()?;
+        Ok(self.finish(start, RecordFieldExpr { ident, expr }))
+    }
+
     pub fn parse_if_expr(&mut self) -> Result<Spanned<IfExpr>> {
         let start = self.start();
         self.expect(Token::KwIf)?;
         let cond = self.parse_expr()?;
-        let then = self.parse_block_expr()?;
-        let then = spanned(then.span(), Expr::Block(then));
-        let else_ = if self.peek_next() == &Token::KwElse {
-            let _ = self.get_next();
-            let else_ = self.parse_block_expr()?;
-            Some(Box::new(spanned(else_.span(), Expr::Block(else_))))
-        } else {
-            None
-        };
+        self.expect(Token::KwThen)?;
+        let then = self.parse_expr()?;
+        self.expect(Token::KwElse)?;
+        let else_ = self.parse_expr()?;
         Ok(self.finish(
             start,
             IfExpr {
                 cond: Box::new(cond),
                 then: Box::new(then),
-                else_,
+                else_: Box::new(else_),
             },
         ))
     }

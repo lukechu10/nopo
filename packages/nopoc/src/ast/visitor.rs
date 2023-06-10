@@ -27,6 +27,16 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
                 visitor.visit_expr(expr);
             }
         }
+        Expr::Tuple(Spanned(TupleExpr { elements }, _)) => {
+            for element in elements {
+                visitor.visit_expr(element);
+            }
+        }
+        Expr::Record(Spanned(RecordExpr { fields }, _)) => {
+            for field in fields {
+                visitor.visit_expr(&field.expr);
+            }
+        }
         Expr::Binary(Spanned(BinaryExpr { lhs, op: _, rhs }, _)) => {
             visitor.visit_expr(lhs);
             visitor.visit_expr(rhs);
@@ -44,9 +54,7 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
         Expr::If(Spanned(IfExpr { cond, then, else_ }, _)) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(then);
-            if let Some(else_) = else_ {
-                visitor.visit_expr(else_);
-            }
+            visitor.visit_expr(else_);
         }
         Expr::While(Spanned(WhileExpr { cond, body }, _)) => {
             visitor.visit_expr(cond);
