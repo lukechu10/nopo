@@ -157,11 +157,16 @@ pub enum BinOp {
     OrOr,
     // Member access
     Dot,
+    // Function application
+    FnCall,
 }
 
 impl TryFrom<Token> for BinOp {
     type Error = ();
 
+    /// Try to convert a token into a [`BinOp`]. Note that this will not automatically convert an
+    /// expression into a [`BinOp::FnCall`]. That should be handled seperately since the seperator
+    /// is just whitespace.
     fn try_from(value: Token) -> Result<Self, Self::Error> {
         match value {
             Token::Plus => Ok(BinOp::Plus),
@@ -202,7 +207,8 @@ impl BinOp {
             BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::UnsignedShiftRight => (500, 510),
             BinOp::Plus | BinOp::Minus => (1000, 1010),
             BinOp::Mul | BinOp::Div | BinOp::Mod => (1020, 1030),
-            BinOp::Dot => (2000, 2010),
+            BinOp::FnCall => (2000, 2010),
+            BinOp::Dot => (3000, 3010),
         }
     }
 }
@@ -227,7 +233,7 @@ impl TryFrom<Token> for UnaryOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostfixOp {
-    FnCall,
+    Index,
 }
 
 impl TryFrom<Token> for PostfixOp {
@@ -235,7 +241,7 @@ impl TryFrom<Token> for PostfixOp {
 
     fn try_from(value: Token) -> Result<Self, Self::Error> {
         match value {
-            Token::LParen => Ok(PostfixOp::FnCall),
+            Token::LBracket => Ok(PostfixOp::Index),
             _ => Err(()),
         }
     }
@@ -244,7 +250,7 @@ impl TryFrom<Token> for PostfixOp {
 impl PostfixOp {
     pub fn binding_power(self) -> (u32, ()) {
         match self {
-            PostfixOp::FnCall => (2000, ()),
+            PostfixOp::Index => (2000, ()),
         }
     }
 }

@@ -1,16 +1,10 @@
 use crate::span::Spanned;
 
-use super::{
-    BinaryExpr, BlockExpr, Expr, FnCallExpr, FnItem, ForExpr, IfExpr, Item, LetStmt, LoopExpr,
-    ReturnStmt, Stmt, UnaryExpr, WhileExpr, Root,
-};
+use super::*;
 
 pub trait Visitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         walk_expr(self, expr)
-    }
-    fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
-        walk_stmt(self, stmt)
     }
     fn visit_item(&mut self, item: &Spanned<Item>) {
         walk_item(self, item)
@@ -26,9 +20,9 @@ pub trait Visitor {
 pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
     match expr {
         Expr::Ident(_) => {}
-        Expr::Block(Spanned(BlockExpr { stmts }, _)) => {
-            for stmt in stmts {
-                visitor.visit_stmt(stmt);
+        Expr::Block(Spanned(BlockExpr { exprs }, _)) => {
+            for expr in exprs {
+                visitor.visit_expr(expr);
             }
         }
         Expr::Binary(Spanned(BinaryExpr { lhs, op: _, rhs }, _)) => {
@@ -36,11 +30,9 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
             visitor.visit_expr(rhs);
         }
         Expr::Unary(Spanned(UnaryExpr { op: _, expr }, _)) => visitor.visit_expr(expr),
-        Expr::FnCall(Spanned(FnCallExpr { callee, args }, _)) => {
-            visitor.visit_expr(callee);
-            for arg in &args.args {
-                visitor.visit_expr(arg);
-            }
+        Expr::Index(Spanned(IndexExpr { lhs, index }, _)) => {
+            visitor.visit_expr(lhs);
+            visitor.visit_expr(index);
         }
         Expr::LitBool(_) => {}
         Expr::LitInt(_) => {}
@@ -70,32 +62,25 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
             visitor.visit_expr(body);
         }
         Expr::Loop(Spanned(LoopExpr { body }, _)) => visitor.visit_expr(body),
-    }
-}
-
-pub fn walk_stmt<T: Visitor + ?Sized>(visitor: &mut T, stmt: &Stmt) {
-    match stmt {
-        Stmt::ExprStmt(expr) => visitor.visit_expr(expr),
-        Stmt::Let(Spanned(LetStmt { binding: _, expr }, _)) => visitor.visit_expr(&expr),
-        Stmt::Return(Spanned(ReturnStmt { expr }, _)) => visitor.visit_expr(expr),
+        Expr::Return(Spanned(ReturnExpr { expr }, _)) => visitor.visit_expr(&expr),
+        Expr::Let(item) => visitor.visit_item(&Spanned(Item::Let(item.clone()), item.span())),
     }
 }
 
 pub fn walk_item<T: Visitor + ?Sized>(visitor: &mut T, item: &Item) {
     match item {
-        Item::Fn(Spanned(
-            FnItem {
+        Item::Let(Spanned(
+            LetItem {
                 attrs: _,
                 vis: _,
                 ident: _,
-                args: _,
+                params: _,
                 ret_ty: _,
-                body,
+                expr,
             },
             _,
-        )) => visitor.visit_expr(body),
-        Item::ExternFn(_) => {}
-        Item::Struct(_) => {}
+        )) => visitor.visit_expr(expr),
+        Item::Type(_) => {}
         Item::Mod(_) => {}
         Item::Use(_) => {}
     }

@@ -50,7 +50,7 @@ pub struct LetItem {
     pub ident: Spanned<String>,
     pub params: Vec<Spanned<Param>>,
     pub ret_ty: Option<Spanned<Type>>,
-    pub expr: Spanned<Expr>,
+    pub expr: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,11 +123,14 @@ pub struct TupleType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Path(Spanned<PathExpr>),
+    Ident(Spanned<IdentExpr>),
+
     Block(Spanned<BlockExpr>),
 
     Binary(Spanned<BinaryExpr>),
     Unary(Spanned<UnaryExpr>),
+
+    Index(Spanned<IndexExpr>),
 
     LitBool(bool),
     LitInt(i64),
@@ -141,23 +144,18 @@ pub enum Expr {
     For(Spanned<ForExpr>),
     Loop(Spanned<LoopExpr>),
     Return(Spanned<ReturnExpr>),
+
+    Let(Spanned<LetItem>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExprStmt {
-    Expr(Expr),
-    Let(LetItem),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathExpr {
-    pub path: Vec<Spanned<String>>,
-    pub args: Vec<Spanned<Expr>>,
+pub struct IdentExpr {
+    pub ident: Spanned<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockExpr {
-    pub stmts: Vec<Spanned<ExprStmt>>,
+    pub exprs: Vec<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +169,12 @@ pub struct BinaryExpr {
 pub struct UnaryExpr {
     pub op: Spanned<UnaryOp>,
     pub expr: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexExpr {
+    pub lhs: Box<Spanned<Expr>>,
+    pub index: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

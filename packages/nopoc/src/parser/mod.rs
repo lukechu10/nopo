@@ -259,7 +259,7 @@ impl Parser {
         }
 
         let ret_ty = if self.peek_next() == &Token::Colon {
-            self.expect(Token::Colon);
+            self.expect(Token::Colon)?;
             Some(self.parse_type()?)
         } else {
             None
@@ -275,7 +275,7 @@ impl Parser {
                 ident,
                 ret_ty,
                 params,
-                expr,
+                expr: Box::new(expr),
             },
         ))
     }
@@ -342,7 +342,10 @@ impl Parser {
         let starts_with_ident = matches!(self.peek_next(), Token::Ident(_)) && parse_enum;
         let ty = match self.peek_next() {
             Token::LParen | Token::LBrace => self.parse_primary_type()?,
-            Token::Ident(_) => self.finish(start, Type::Path(self.parse_path_type()?)),
+            Token::Ident(_) => {
+                let path = self.parse_path_type()?;
+                self.finish(start, Type::Path(path))
+            }
             token => {
                 return Err(ParseError::ExpectedType {
                     unexpected: token.clone(),
@@ -379,11 +382,11 @@ impl Parser {
         let start = self.start();
         match self.peek_next() {
             Token::LParen => {
-                self.expect(Token::LParen);
+                self.expect(Token::LParen)?;
                 let ty = self.parse_type()?;
                 if self.peek_next() == &Token::Comma {
                     // Parse a tuple.
-                    self.expect(Token::Comma);
+                    self.expect(Token::Comma)?;
                     let mut fields = vec![ty];
                     while matches!(
                         self.peek_next(),
@@ -391,11 +394,11 @@ impl Parser {
                     ) {
                         fields.push(self.parse_type()?);
                     }
-                    self.expect(Token::RParen);
+                    self.expect(Token::RParen)?;
                     Ok(self.finish(start, Type::Tuple(self.finish(start, TupleType { fields }))))
                 } else {
                     // This is just a parenthesized type.
-                    self.expect(Token::RParen);
+                    self.expect(Token::RParen)?;
                     Ok(ty)
                 }
             }
@@ -427,7 +430,7 @@ impl Parser {
         let initial = self.parse_ident()?;
         let mut path = vec![initial];
         while self.peek_next() == &Token::Dot {
-            self.expect(Token::Dot);
+            self.expect(Token::Dot)?;
             path.push(self.parse_ident()?);
         }
 
@@ -459,7 +462,7 @@ impl Parser {
     pub fn parse_record_field(&mut self) -> Result<Spanned<RecordField>> {
         let start = self.start();
         let ident = self.parse_ident()?;
-        self.expect(Token::Colon);
+        self.expect(Token::Colon)?;
         let ty = self.parse_type()?;
         Ok(self.finish(
             start,
@@ -498,12 +501,34 @@ impl Parser {
         self.parse_expr_with_min_bp(0)
     }
 
+    pub fn peek_is_expr(&self) -> bool {
+        match self.peek_next() {
+            Token::Ident(_)
+            | Token::LBrace
+            | Token::LParen
+            | Token::LitTrue
+            | Token::LitFalse
+            | Token::LitFloat(_)
+            | Token::LitInt(_)
+            | Token::LitStr(_)
+            | Token::LitChar(_)
+            | Token::KwIf
+            | Token::KwFor
+            | Token::KwWhile
+            | Token::KwLoop
+            | Token::KwLet
+            | Token::KwReturn => true,
+            tok if UnaryOp::try_from(tok.clone()).is_ok() => true,
+            _ => false,
+        }
+    }
+
     pub fn parse_primary_expr(&mut self) -> Result<Spanned<Expr>> {
         let start = self.start();
         match self.peek_next() {
             Token::Ident(_) => {
                 let ident = self.parse_ident()?;
-                Ok(self.finish(start, Expr::Ident(ident)))
+                Ok(self.finish(start, Expr::Ident(self.finish(start, IdentExpr { ident }))))
             }
             Token::LBrace => {
                 let block = self.parse_block_expr()?;
@@ -548,6 +573,31 @@ impl Parser {
                 }
                 Ok(self.finish(start, Expr::LitChar(char)))
             }
+            Token::KwIf => {
+                let expr = self.parse_if_expr()?;
+                Ok(self.finish(start, Expr::If(expr)))
+            }
+            Token::KwFor => {
+                let expr = self.parse_for_expr()?;
+                Ok(self.finish(start, Expr::For(expr)))
+            }
+            Token::KwWhile => {
+                let expr = self.parse_while_expr()?;
+                Ok(self.finish(start, Expr::While(expr)))
+            }
+            Token::KwLoop => {
+                let expr = self.parse_loop_expr()?;
+                Ok(self.finish(start, Expr::Loop(expr)))
+            }
+            Token::KwLet => {
+                let attrs = self.parse_attributes()?;
+                let expr = self.parse_let_item(attrs)?;
+                Ok(self.finish(start, Expr::Let(expr)))
+            }
+            Token::KwReturn => {
+                let expr = self.parse_return_expr()?;
+                Ok(self.finish(start, Expr::Return(expr)))
+            }
             tok if UnaryOp::try_from(tok.clone()).is_ok() => {
                 let start = self.start();
                 let op = UnaryOp::try_from(tok.clone()).unwrap();
@@ -584,15 +634,17 @@ impl Parser {
                     break;
                 }
                 match postfix {
-                    PostfixOp::FnCall => {
-                        let args = self.parse_fn_call_args()?;
+                    PostfixOp::Index => {
+                        self.expect(Token::LBracket)?;
+                        let index = self.parse_expr()?;
+                        self.expect(Token::RBracket)?;
                         lhs = self.finish(
                             start,
-                            Expr::FnCall(self.finish(
+                            Expr::Index(self.finish(
                                 start,
-                                FnCallExpr {
-                                    callee: Box::new(lhs),
-                                    args,
+                                IndexExpr {
+                                    lhs: Box::new(lhs),
+                                    index: Box::new(index),
                                 },
                             )),
                         );
@@ -604,6 +656,7 @@ impl Parser {
             let bin_op_start = self.start();
             let bin_op: BinOp = match self.peek_next().clone().try_into() {
                 Ok(op) => op,
+                Err(_) if self.peek_is_expr() => BinOp::FnCall,
                 Err(_) => break,
             };
             let (l_bp, r_bp) = bin_op.binding_power();
@@ -612,7 +665,9 @@ impl Parser {
             }
 
             // Consume the operator.
-            let _ = self.get_next();
+            if bin_op != BinOp::FnCall {
+                let _ = self.get_next();
+            }
             let bin_op = self.finish(bin_op_start, bin_op);
 
             // Parse RHS.
@@ -637,12 +692,12 @@ impl Parser {
         let start = self.start();
         self.expect(Token::LBrace)?;
 
-        let mut stmts = Vec::new();
+        let mut exprs = Vec::new();
         while self.peek_next() != &Token::RBrace {
-            stmts.push(self.parse_stmt()?);
+            exprs.push(self.parse_expr()?);
         }
         self.expect(Token::RBrace)?;
-        Ok(self.finish(start, BlockExpr { stmts }))
+        Ok(self.finish(start, BlockExpr { exprs }))
     }
 
     pub fn parse_if_expr(&mut self) -> Result<Spanned<IfExpr>> {
@@ -713,49 +768,12 @@ impl Parser {
         let start = self.start();
         self.expect(Token::KwReturn)?;
         let expr = self.parse_expr()?;
-        Ok(self.finish(start, ReturnExpr { expr }))
-    }
-
-    pub fn parse_struct_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<StructItem>> {
-        let start = self.start();
-        let vis = self.parse_vis()?;
-        self.expect(Token::KwStruct)?;
-        let ident = self.parse_ident()?;
-        self.expect(Token::LBrace)?;
-        let mut fields = Vec::new();
-        while self.peek_next() != &Token::RBrace {
-            fields.push(self.parse_struct_field()?);
-            match self.peek_next() {
-                Token::RBrace => break,
-                Token::Comma => {
-                    let _ = self.get_next();
-                    if self.peek_next() == &Token::RBrace {
-                        break;
-                    }
-                }
-                _ => {
-                    self.expect(Token::Comma)?;
-                }
-            }
-        }
-        self.expect(Token::RBrace)?;
         Ok(self.finish(
             start,
-            StructItem {
-                attrs,
-                vis,
-                ident,
-                fields,
+            ReturnExpr {
+                expr: Box::new(expr),
             },
         ))
-    }
-
-    pub fn parse_struct_field(&mut self) -> Result<Spanned<StructField>> {
-        let start = self.start();
-        let ident = self.parse_ident()?;
-        self.expect(Token::Colon)?;
-        let ty = self.parse_ident()?;
-        Ok(self.finish(start, StructField { ident, ty }))
     }
 
     pub fn parse_mod_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<ModItem>> {

@@ -6,3 +6,5 @@ members = [
 	"packages/nopoc",
 ]
 default-members = ["packages/nopo"]
+
+resolver = "2"
