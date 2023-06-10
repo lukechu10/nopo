@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use la_arena::Idx;
 
 use crate::ast::visitor::{walk_item, Visitor};
-use crate::ast::{ExternFnItem, FnItem, Item, Root};
+use crate::ast::{Item, LetItem, Root};
 use crate::span::{Span, Spanned};
 
 use self::scope::Scope;
@@ -33,7 +33,8 @@ pub struct SymbolData {
 
 #[derive(Debug)]
 pub enum SymbolKind {
-    Fn(FnSymbol),
+    /// A global symbol declaration.
+    Global(LetSymbol),
     Type(TypeId),
     Mod(ModSymbol),
     /// A local variable inside a function body.
@@ -56,8 +57,8 @@ pub struct TypeData {
 /// A symbol that is a type.
 #[derive(Debug)]
 pub enum TypeKind {
-    Struct(StructSymbol),
-    Enum(EnumSymbol),
+    Record(RecordSymbol),
+    Adt(AdtSymbol),
     /// A dummy value.
     Tmp,
 }
@@ -70,17 +71,12 @@ pub enum ResolvedType {
 }
 
 #[derive(Debug)]
-pub struct FnSymbol {
-    pub param_ty: Vec<ResolvedType>,
-}
-
-#[derive(Debug)]
-pub struct StructSymbol {
+pub struct RecordSymbol {
     pub fields: HashMap<String, ResolvedType>,
 }
 
 #[derive(Debug)]
-pub struct EnumSymbol {
+pub struct AdtSymbol {
     pub variants: HashSet<String>,
 }
 
@@ -92,7 +88,8 @@ pub struct ModSymbol {
 #[derive(Debug)]
 pub struct LetSymbol {
     pub ident: String,
-    pub ty: TypeId,
+    pub param_ty: Vec<ResolvedType>,
+    pub ret_ty: Option<ResolvedType>,
 }
 
 /// Resolves symbols. Also performs type-checking as this is needed for resolving fields/methods.
@@ -136,26 +133,18 @@ impl<'a> Visitor for ModSymbolResolutionPass<'a> {
     fn visit_item(&mut self, item: &Spanned<Item>) {
         // Collect all the top-level symbols.
         match &**item {
-            Item::Fn(Spanned(fn_item, span)) => self.top_level_symbols.insert(
-                fn_item.ident.to_string(),
+            Item::Let(Spanned(let_item, span)) => self.top_level_symbols.insert(
+                let_item.ident.to_string(),
                 self.symbol_arena.alloc(SymbolData {
-                    ident: fn_item.ident.clone(),
+                    ident: let_item.ident.clone(),
                     kind: SymbolKind::Tmp,
                     span: *span,
                 }),
             ),
-            Item::ExternFn(Spanned(extern_fn_item, span)) => self.top_level_symbols.insert(
-                extern_fn_item.ident.to_string(),
+            Item::Type(Spanned(type_item, span)) => self.top_level_symbols.insert(
+                type_item.ident.to_string(),
                 self.symbol_arena.alloc(SymbolData {
-                    ident: extern_fn_item.ident.clone(),
-                    kind: SymbolKind::Tmp,
-                    span: *span,
-                }),
-            ),
-            Item::Struct(Spanned(struct_item, span)) => self.top_level_symbols.insert(
-                struct_item.ident.to_string(),
-                self.symbol_arena.alloc(SymbolData {
-                    ident: struct_item.ident.clone(),
+                    ident: type_item.ident.clone(),
                     kind: SymbolKind::Tmp,
                     span: *span,
                 }),
@@ -212,7 +201,7 @@ impl<'a> ModSymbolResolutionPass<'a> {
         // Replace all type items with temporary type.
         for &(item, symbol_id) in items {
             match &**item {
-                Item::Struct(_) => {
+                Item::Type(_) => {
                     let symbol_data = &mut self.symbol_arena[symbol_id];
                     let type_id = self.type_arena.alloc(TypeData {
                         ident: symbol_data.ident.clone(),
@@ -230,18 +219,24 @@ impl<'a> ModSymbolResolutionPass<'a> {
     fn finish_top_level_items(&mut self, items: &[(&Spanned<Item>, SymbolId)], scope: &Scope) {
         for &(item, symbol_id) in items {
             match &**item {
-                Item::Fn(Spanned(FnItem { args, .. }, _))
-                | Item::ExternFn(Spanned(ExternFnItem { args, .. }, _)) => {
-                    let param_ty = args
-                        .args
+                Item::Let(Spanned(
+                    LetItem {
+                        ident,
+                        params,
+                        ret_ty,
+                        ..
+                    },
+                    _,
+                )) => {
+                    let param_ty = params
                         .iter()
                         .map(|x| {
                             let Some(ty) = &x.ty else {
-                                eprintln!("ommited type not allowed in fn declaration");
+                                eprintln!("ommited type not allowed in top-level let declaration");
                                 return ResolvedType::Error;
                             };
                             let Some(symbol) = self.resolve_ident(scope, ty) else {
-                                eprintln!("could not find type {}", ty.as_str());
+                                eprintln!("could not find type {ty:?}");
                                 return ResolvedType::Error;
                             };
 
@@ -253,7 +248,28 @@ impl<'a> ModSymbolResolutionPass<'a> {
                             }
                         })
                         .collect();
-                    self.symbol_arena[symbol_id].kind = SymbolKind::Fn(FnSymbol { param_ty })
+                    let ret_ty = {
+                        if let Some(ret_ty) = ret_ty {
+                            if let Some(ret_ty) = self.resolve_ident(scope, ret_ty) {
+                                if let SymbolKind::Type(ret_ty) = &ret_ty.kind {
+                                    Some(ResolvedType::Id(*ret_ty))
+                                } else {
+                                    eprintln!("symbol is not a type");
+                                    Some(ResolvedType::Error)
+                                }
+                            } else {
+                                eprintln!("could not find type {ret_ty:?}");
+                                Some(ResolvedType::Error)
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    self.symbol_arena[symbol_id].kind = SymbolKind::Let(LetSymbol {
+                        ident: ident.to_string(),
+                        param_ty,
+                        ret_ty,
+                    });
                 }
                 Item::Struct(Spanned(struct_item, _)) => {
                     let fields = struct_item
@@ -278,7 +294,7 @@ impl<'a> ModSymbolResolutionPass<'a> {
                         SymbolKind::Type(type_id) => type_id,
                         _ => unreachable!("SymbolKind should be a Type"),
                     };
-                    self.type_arena[type_id].kind = TypeKind::Struct(StructSymbol { fields });
+                    self.type_arena[type_id].kind = TypeKind::Record(RecordSymbol { fields });
                 }
                 Item::Mod(Spanned(mod_item, _)) => {
                     // Recursively create a new ModSymbolResolutionPass.

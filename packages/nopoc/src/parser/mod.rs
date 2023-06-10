@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use la_arena::Arena;
 use logos::Logos;
 use thiserror::Error;
 
@@ -164,9 +165,9 @@ impl Parser {
     }
 
     pub fn parse_root(&mut self) -> Result<Root> {
-        let mut items = Vec::new();
+        let mut items = Arena::new();
         while !self.eof() {
-            items.push(self.parse_item()?);
+            items.alloc(self.parse_item()?);
         }
         Ok(Root { items })
     }
@@ -252,6 +253,8 @@ impl Parser {
 
         self.expect(Token::Eq)?;
         let expr = self.parse_expr()?;
+
+        self.expect(Token::Semi)?;
         Ok(self.finish(
             start,
             LetItem {

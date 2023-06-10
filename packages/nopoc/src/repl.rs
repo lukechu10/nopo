@@ -22,7 +22,7 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
 
         let mut parser = crate::parser::Parser::new(FileId::DUMMY, line); // FIXME: Do not use
                                                                           // FileId::DUMMY
-        let root = match parser.parse_expr() {
+        let root = match parser.parse_root() {
             Ok(root) => root,
             Err(err) => {
                 eprintln!("Error: {err}");

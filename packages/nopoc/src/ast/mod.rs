@@ -2,13 +2,17 @@
 
 pub mod visitor;
 
+use la_arena::{Arena, Idx};
+
 use crate::parser::lexer::{BinOp, UnaryOp};
 use crate::span::Spanned;
+
+pub type ItemId = Idx<Spanned<Item>>;
 
 /// Represents the root of the AST. A source file is composed of a single root node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
-    pub items: Vec<Spanned<Item>>,
+    pub items: Arena<Spanned<Item>>,
 }
 
 /// Attributes can be attached to an item.
@@ -112,7 +116,7 @@ pub enum Type {
     Fn(Spanned<FnType>),
     Tuple(Spanned<TupleType>),
     /// The result of the application of a type constructor.
-    Constructed(Spanned<ConstructedType>)
+    Constructed(Spanned<ConstructedType>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
