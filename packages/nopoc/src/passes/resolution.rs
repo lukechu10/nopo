@@ -14,6 +14,7 @@
 //! items.
 
 use std::collections::HashMap;
+use std::fmt;
 
 use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::{Diagnostics, IntoReport};
@@ -253,6 +254,52 @@ impl ResolvedType {
     pub fn of_type_item(id: TypeId) -> Self {
         Self::Ident(id)
     }
+
+    /// Pretty print the type.
+    pub fn pretty<'a>(&'a self, map: &'a ArenaMap<TypeId, TypeData>) -> ResolvedTypePretty<'a> {
+        ResolvedTypePretty(self, map)
+    }
+}
+
+pub struct ResolvedTypePretty<'a>(&'a ResolvedType, &'a ArenaMap<TypeId, TypeData>);
+impl<'a> fmt::Display for ResolvedTypePretty<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            ResolvedType::Ident(id) => write!(f, "{}", self.1[*id].ident)?,
+            ResolvedType::Tuple(types) => {
+                write!(f, "(")?;
+                for ty in types {
+                    write!(f, "{}", ty.pretty(self.1))?;
+                }
+                write!(f, ")")?;
+            }
+            ResolvedType::Fn { arg, ret } => {
+                write!(f, "({} -> {})", arg.pretty(self.1), ret.pretty(self.1))?
+            }
+            ResolvedType::Constructed { constructor, arg } => {
+                write!(f, "({} {})", constructor.pretty(self.1), arg.pretty(self.1))?
+            }
+            ResolvedType::TypeParamOnType {
+                constructor,
+                param_pos,
+            } => write!(
+                f,
+                "'{}",
+                self.1[*constructor].ty_params[*param_pos].ident
+            )?,
+            // TODO: display actual name.
+            ResolvedType::TypeParamOnLet { item: _, param_pos } => write!(f, "'{param_pos}")?,
+            ResolvedType::Bool => write!(f, "bool")?,
+            ResolvedType::Int => write!(f, "int")?,
+            ResolvedType::Float => write!(f, "float")?,
+            ResolvedType::String => write!(f, "string")?,
+            ResolvedType::Char => write!(f, "char")?,
+            ResolvedType::Tmp(_) => write!(f, "{{unknown}}")?,
+            ResolvedType::Err => write!(f, "ERR")?,
+        }
+
+        Ok(())
+    }
 }
 
 /// Data about a type.
@@ -260,12 +307,30 @@ impl ResolvedType {
 pub struct TypeData {
     pub ident: Spanned<Ident>,
     pub kind: TypeKind,
+    pub ty_params: Vec<Spanned<TypeParam>>,
     pub span: Span,
 }
 #[derive(Debug)]
 pub enum TypeKind {
     Record(RecordSymbol),
     Adt(AdtSymbol),
+}
+impl TypeKind {
+    pub fn as_record(&self) -> Option<&RecordSymbol> {
+        if let Self::Record(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_adt(&self) -> Option<&AdtSymbol> {
+        if let Self::Adt(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
 }
 #[derive(Debug)]
 pub struct RecordSymbol {
@@ -323,6 +388,7 @@ impl Visitor for ResolveTypeContents {
             TypeData {
                 ident: item.ident.clone(),
                 kind,
+                ty_params: item.ty_params.clone(),
                 span: item.span(),
             },
         );

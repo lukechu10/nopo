@@ -71,7 +71,7 @@ pub struct TypeItem {
 }
 
 /// Type parameters for the type constructor.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TypeParam {
     pub ident: Spanned<Ident>,
 }

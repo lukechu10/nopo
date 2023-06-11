@@ -104,8 +104,10 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
             }
         });
 
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
     Ok(quote! {
-        impl ::nopo_diagnostics::IntoReport for #ident {
+        impl #impl_generics ::nopo_diagnostics::IntoReport for #ident #ty_generics #where_clause {
             fn into_report(self) -> ::nopo_diagnostics::Report {
                 let #ident { #(#field_idents),* } = self;
                 ::nopo_diagnostics::Report::build(#kind, #span.file_id, #span.start as usize)

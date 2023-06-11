@@ -5,27 +5,30 @@
 //! Prefix all constraint types in code with `c_` to distinguish from syntax elements.
 
 use std::collections::HashMap;
-use std::ops::Sub;
 
 use la_arena::{Arena, ArenaMap};
-use nopo_diagnostics::span::{FileId, Span, Spanned};
+use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, IntoReport};
 
 use crate::ast::visitor::{walk_expr, Visitor};
 use crate::ast::{Expr, LetId, LetItem, Root, Type, TypeDef, TypeId, TypeItem};
-use crate::parser::lexer::UnaryOp;
+use crate::parser::lexer::{BinOp, UnaryOp};
 
 use super::map::NodeMap;
 use super::resolution::{
     BindingData, BindingId, BindingsMap, ResolveLetContents, ResolvedBinding, ResolvedType,
-    TypeData, TypeKind,
+    ResolvedTypePretty, TypeData, TypeKind,
 };
 
 #[derive(IntoReport)]
 #[kind("error")]
 #[message("could not unify types")]
-struct CouldNotUnifyTypes {
+struct CouldNotUnifyTypes<'a> {
     span: Span,
+    #[label(message = "this is of type `{first}`")]
+    first: Spanned<ResolvedTypePretty<'a>>,
+    #[label(message = "this is of type `{second}`")]
+    second: Spanned<ResolvedTypePretty<'a>>,
 }
 
 #[derive(IntoReport)]
@@ -61,8 +64,10 @@ pub struct InferState {
 }
 
 /// Represents a type constraint, constraing the LHS and the RHS together.
+///
+/// The spans represent where the constraints are coming from.
 #[derive(Debug, Clone)]
-pub struct Constraint(ResolvedType, ResolvedType);
+pub struct Constraint(Spanned<ResolvedType>, Spanned<ResolvedType>);
 
 impl InferState {
     /// Create a new type variable.
@@ -97,7 +102,14 @@ impl Visitor for UnifyTypes {
             self.visit_let_item(idx, item);
         }
 
-        self.solve();
+        let solutions = self.solve();
+        // Back substitute back into bindings.
+        for (id, ty) in &mut self.state.binding_types_map {
+            for (var, sub) in &solutions {
+                ty.apply_sub(*var, sub.clone());
+            }
+            eprintln!("{}\t\t: {}", self.bindings[*id].ident, ty.pretty(&self.type_item_map));
+        }
     }
 
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
@@ -125,9 +137,11 @@ impl Visitor for UnifyTypes {
 
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
         // The type of the let item.
-        let c_ty = self.state.new_type_var();
+        let c_ty = spanned(item.span(), self.state.new_type_var());
         let binding = self.bindings_map.let_items[&**item];
-        self.state.binding_types_map.insert(binding, c_ty.clone());
+        self.state
+            .binding_types_map
+            .insert(binding, c_ty.clone().unspan());
 
         // Constraints for let params. Since params can have explicit type annotations, we can use
         // a shortcut and add the resolved types right away instead of inferring them.
@@ -148,18 +162,24 @@ impl Visitor for UnifyTypes {
 
         // Constraint for return type.
         self.visit_expr(&item.expr);
-        let c_expr_ty = self.state.expr_types_map[&**item.expr].clone();
+        let c_expr_ty = spanned(
+            item.expr.span(),
+            self.state.expr_types_map[&**item.expr].clone(),
+        );
         let c_ret_ty = if let Some(ret_ty) = &item.ret_ty {
-            self.type_map[&**ret_ty].clone()
+            spanned(ret_ty.span(), self.type_map[&**ret_ty].clone())
         } else {
-            self.state.new_type_var()
+            spanned(item.ident.span(), self.state.new_type_var())
         };
         self.state
             .constraints
             .push(Constraint(c_ret_ty.clone(), c_expr_ty));
 
         // Add type for the whole let item.
-        let c_fn_ty = ResolvedType::new_curried_function(&c_params_ty, c_ret_ty);
+        let c_fn_ty = spanned(
+            item.span(),
+            ResolvedType::new_curried_function(&c_params_ty, c_ret_ty.unspan()),
+        );
         self.state.constraints.push(Constraint(c_ty, c_fn_ty));
     }
 
@@ -204,31 +224,69 @@ impl Visitor for UnifyTypes {
             ),
             Expr::Record(_) => todo!("unify record types"),
             Expr::Binary(binary_expr) => {
-                // TODO: binary operations on types other than int (introduce new operator or
-                // ad-hoc polymorphism?)
                 let c_lhs = self.state.expr_types_map[&*binary_expr.lhs].clone();
                 let c_rhs = self.state.expr_types_map[&*binary_expr.rhs].clone();
-                self.state
-                    .constraints
-                    .push(Constraint(c_lhs, ResolvedType::Int));
-                self.state
-                    .constraints
-                    .push(Constraint(c_rhs, ResolvedType::Int));
-                ResolvedType::Int
+                // Handle fn calls seperately.
+                if *binary_expr.op == BinOp::FnCall {
+                    // Constrain LHS to be a function that takes the RHS.
+                    let c_ret = self.state.new_type_var();
+                    self.state.constraints.push(Constraint(
+                        spanned(binary_expr.lhs.span(), c_lhs),
+                        spanned(
+                            binary_expr.lhs.span(),
+                            ResolvedType::new_curried_function(&[c_rhs], c_ret.clone()),
+                        ),
+                    ));
+                    c_ret
+                } else {
+                    // TODO: binary operations on types other than int (introduce new operator or
+                    // ad-hoc polymorphism?)
+                    let (c_arg, c_ret) = match *binary_expr.op {
+                        BinOp::Plus
+                        | BinOp::Minus
+                        | BinOp::Mul
+                        | BinOp::Div
+                        | BinOp::Mod
+                        | BinOp::And
+                        | BinOp::Or
+                        | BinOp::Xor
+                        | BinOp::ShiftLeft
+                        | BinOp::ShiftRight
+                        | BinOp::UnsignedShiftRight => (ResolvedType::Int, ResolvedType::Int),
+                        BinOp::Eq | BinOp::Neq => (self.state.new_type_var(), ResolvedType::Bool),
+                        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+                            (ResolvedType::Int, ResolvedType::Bool)
+                        }
+                        BinOp::AndAnd | BinOp::OrOr => (ResolvedType::Bool, ResolvedType::Bool),
+                        BinOp::Dot => todo!(),
+                        BinOp::FnCall => unreachable!(),
+                    };
+                    self.state.constraints.push(Constraint(
+                        spanned(binary_expr.lhs.span(), c_lhs),
+                        spanned(binary_expr.op.span(), c_arg.clone()),
+                    ));
+                    self.state.constraints.push(Constraint(
+                        spanned(binary_expr.rhs.span(), c_rhs),
+                        spanned(binary_expr.op.span(), c_arg),
+                    ));
+                    c_ret
+                }
             }
             Expr::Unary(unary_expr) => match *unary_expr.op {
                 UnaryOp::Neg => {
                     let c_expr = self.state.expr_types_map[&*unary_expr.expr].clone();
-                    self.state
-                        .constraints
-                        .push(Constraint(c_expr, ResolvedType::Int));
+                    self.state.constraints.push(Constraint(
+                        spanned(unary_expr.expr.span(), c_expr),
+                        spanned(unary_expr.op.span(), ResolvedType::Int),
+                    ));
                     ResolvedType::Int
                 }
                 UnaryOp::Not => {
                     let c_expr = self.state.expr_types_map[&*unary_expr.expr].clone();
-                    self.state
-                        .constraints
-                        .push(Constraint(c_expr, ResolvedType::Bool));
+                    self.state.constraints.push(Constraint(
+                        spanned(unary_expr.expr.span(), c_expr),
+                        spanned(unary_expr.op.span(), ResolvedType::Bool),
+                    ));
                     ResolvedType::Bool
                 }
             },
@@ -240,19 +298,26 @@ impl Visitor for UnifyTypes {
             Expr::LitChar(_) => ResolvedType::Char,
             Expr::If(if_expr) => {
                 let c_cond_ty = self.state.expr_types_map[&if_expr.cond].clone();
-                self.state
-                    .constraints
-                    .push(Constraint(c_cond_ty, ResolvedType::Bool));
-                let c_branch_ty = self.state.new_type_var();
-                let c_then = self.state.expr_types_map[&if_expr.then].clone();
-                let c_else = self.state.expr_types_map[&if_expr.else_].clone();
+                self.state.constraints.push(Constraint(
+                    spanned(if_expr.cond.span(), c_cond_ty),
+                    spanned(if_expr.cond.span(), ResolvedType::Bool),
+                ));
+                let c_branch_ty = spanned(if_expr.span(), self.state.new_type_var());
+                let c_then = spanned(
+                    if_expr.then.span(),
+                    self.state.expr_types_map[&if_expr.then].clone(),
+                );
+                let c_else = spanned(
+                    if_expr.else_.span(),
+                    self.state.expr_types_map[&if_expr.else_].clone(),
+                );
                 self.state
                     .constraints
                     .push(Constraint(c_branch_ty.clone(), c_then));
                 self.state
                     .constraints
                     .push(Constraint(c_branch_ty.clone(), c_else));
-                c_branch_ty
+                c_branch_ty.unspan()
             }
             Expr::While(_) => todo!(),
             Expr::For(_) => todo!(),
@@ -267,60 +332,69 @@ impl Visitor for UnifyTypes {
 
 impl UnifyTypes {
     /// Solve the constraints by using substitutions.
-    fn solve(&mut self) {
-        let solutions = solve_constraints(self.state.constraints.clone(), &mut self.diagnostics);
-    }
-}
+    fn solve(&mut self) -> HashMap<u32, ResolvedType> {
+        let mut constraints = self.state.constraints.clone();
+        let diagnostics: &mut Diagnostics = &mut self.diagnostics;
+        let mut solutions = HashMap::new();
+        loop {
+            let substitutions = constraints
+                .iter()
+                .cloned()
+                .map(|constraint| {
+                    (
+                        constraint.clone(),
+                        Constraint::generate_subs(constraint.0.unspan(), constraint.1.unspan()),
+                    )
+                })
+                .collect::<Vec<_>>();
 
-fn solve_constraints(
-    mut constraints: Vec<Constraint>,
-    diagnostics: &mut Diagnostics,
-) -> HashMap<u32, ResolvedType> {
-    let mut map = HashMap::new();
-    loop {
-        let substitutions = constraints
-            .iter()
-            .map(Constraint::generate_subs)
-            .collect::<Vec<_>>();
+            // If there are no substitutions to be made left, we are done.
+            if !substitutions
+                .iter()
+                .any(|(_, sub)| matches!(sub, SubSearch::Sub(_, _)))
+            {
+                break;
+            }
 
-        // If there are no substitutions to be made left, we are done.
-        if !substitutions
-            .iter()
-            .any(|sub| matches!(sub, SubSearch::Sub(_, _)))
-        {
-            break;
-        }
+            // Remove all the constraints that are tautologies.
+            constraints = substitutions
+                .iter()
+                .filter(|(_, sub)| sub == &SubSearch::Tautology)
+                .map(|(c, _)| c)
+                .cloned()
+                .collect();
 
-        // Remove all the constraints that are tautologies.
-        constraints = constraints
-            .into_iter()
-            .zip(&substitutions)
-            .filter(|(_, sub)| sub == &&SubSearch::Tautology)
-            .map(|(constraint, _)| constraint)
-            .collect();
-
-        // Handle all substitution errors.
-        for substitution in substitutions {
-            match substitution {
-                SubSearch::Contradiction => {
-                    diagnostics.add(CouldNotUnifyTypes {
+            // Handle all substitution errors.
+            for (constraint, substitution) in substitutions {
+                match substitution {
+                    SubSearch::Contradiction => {
+                        diagnostics.add(CouldNotUnifyTypes {
+                            span: constraint.0.span(),
+                            first: spanned(
+                                constraint.0.span(),
+                                constraint.0.pretty(&self.type_item_map),
+                            ),
+                            second: spanned(
+                                constraint.0.span(),
+                                constraint.1.pretty(&self.type_item_map),
+                            ),
+                        });
+                    }
+                    SubSearch::Sub(i, c_ty) => {
+                        apply_substitution(&mut constraints, i, c_ty.clone());
+                        solutions.insert(i, c_ty);
+                    }
+                    SubSearch::InfiniteType => diagnostics.add(CannotCreateInfiniteType {
                         span: Span::dummy(FileId::DUMMY),
-                    });
+                    }),
+                    SubSearch::None => {}
+                    SubSearch::Tautology => {}
                 }
-                SubSearch::Sub(i, c_ty) => {
-                    apply_substitution(&mut constraints, i, c_ty.clone());
-                    map.insert(i, c_ty);
-                }
-                SubSearch::InfiniteType => diagnostics.add(CannotCreateInfiniteType {
-                    span: Span::dummy(FileId::DUMMY),
-                }),
-                SubSearch::None => {}
-                SubSearch::Tautology => {}
             }
         }
-    }
 
-    map
+        solutions
+    }
 }
 
 /// Substitute the type variable with id `i` with `c_ty`.
@@ -356,84 +430,79 @@ impl SubSearch {
 
 impl Constraint {
     /// Generate a substitution from the constraint. There may be more than one substitution.
-    fn generate_subs(&self) -> SubSearch {
+    fn generate_subs(lhs: ResolvedType, rhs: ResolvedType) -> SubSearch {
         use ResolvedType::*;
 
-        if std::mem::discriminant(&self.0) != std::mem::discriminant(&self.1) {
-            return SubSearch::Contradiction;
-        } else {
-            match (&self.0, &self.1) {
-                (Tmp(a), rhs) => {
-                    if rhs.includes_type_var(*a) {
-                        SubSearch::InfiniteType
-                    } else {
-                        SubSearch::Sub(*a, rhs.clone())
-                    }
+        match (lhs, rhs) {
+            (Tmp(a), rhs) => {
+                if rhs.includes_type_var(a) {
+                    SubSearch::InfiniteType
+                } else {
+                    SubSearch::Sub(a, rhs.clone())
                 }
-                (lhs, Tmp(a)) => {
-                    if lhs.includes_type_var(*a) {
-                        SubSearch::InfiniteType
-                    } else {
-                        SubSearch::Sub(*a, lhs.clone())
-                    }
-                }
-                (Tuple(lhs), Tuple(rhs)) => {
-                    if lhs.len() != rhs.len() {
-                        SubSearch::Contradiction
-                    } else {
-                        for (lhs, rhs) in lhs.iter().zip(rhs) {
-                            let sub = Self(lhs.clone(), rhs.clone()).generate_subs();
-                            if sub.propagate_up() {
-                                return sub;
-                            }
-                        }
-                        SubSearch::None
-                    }
-                }
-                (
-                    Fn {
-                        arg: lhs_arg,
-                        ret: lhs_ret,
-                    },
-                    Fn {
-                        arg: rhs_arg,
-                        ret: rhs_ret,
-                    },
-                ) => {
-                    let sub1 = Constraint(*lhs_arg.clone(), *rhs_arg.clone()).generate_subs();
-                    if sub1.propagate_up() {
-                        return sub1;
-                    }
-                    let sub2 = Constraint(*lhs_ret.clone(), *rhs_ret.clone()).generate_subs();
-                    if sub2.propagate_up() {
-                        return sub2;
-                    }
-                    SubSearch::None
-                }
-                (
-                    Constructed {
-                        constructor: lhs_constructor,
-                        arg: lhs_arg,
-                    },
-                    Constructed {
-                        constructor: rhs_constructor,
-                        arg: rhs_arg,
-                    },
-                ) => {
-                    let sub1 = Constraint(*lhs_constructor.clone(), *rhs_constructor.clone())
-                        .generate_subs();
-                    if sub1.propagate_up() {
-                        return sub1;
-                    }
-                    let sub2 = Constraint(*lhs_arg.clone(), *rhs_arg.clone()).generate_subs();
-                    if sub2.propagate_up() {
-                        return sub2;
-                    }
-                    SubSearch::None
-                }
-                (lhs, rhs) if lhs == rhs => SubSearch::Tautology,
-                _ => SubSearch::None,
             }
+            (lhs, Tmp(a)) => {
+                if lhs.includes_type_var(a) {
+                    SubSearch::InfiniteType
+                } else {
+                    SubSearch::Sub(a, lhs.clone())
+                }
+            }
+            (Tuple(lhs), Tuple(rhs)) => {
+                if lhs.len() != rhs.len() {
+                    SubSearch::Contradiction
+                } else {
+                    for (lhs, rhs) in lhs.into_iter().zip(rhs) {
+                        let sub = Self::generate_subs(lhs, rhs);
+                        if sub.propagate_up() {
+                            return sub;
+                        }
+                    }
+                    SubSearch::None
+                }
+            }
+            (
+                Fn {
+                    arg: lhs_arg,
+                    ret: lhs_ret,
+                },
+                Fn {
+                    arg: rhs_arg,
+                    ret: rhs_ret,
+                },
+            ) => {
+                let sub1 = Self::generate_subs(*lhs_arg, *rhs_arg);
+                if sub1.propagate_up() {
+                    return sub1;
+                }
+                let sub2 = Self::generate_subs(*lhs_ret, *rhs_ret);
+                if sub2.propagate_up() {
+                    return sub2;
+                }
+                SubSearch::None
+            }
+            (
+                Constructed {
+                    constructor: lhs_constructor,
+                    arg: lhs_arg,
+                },
+                Constructed {
+                    constructor: rhs_constructor,
+                    arg: rhs_arg,
+                },
+            ) => {
+                let sub1 = Self::generate_subs(*lhs_constructor, *rhs_constructor);
+                if sub1.propagate_up() {
+                    return sub1;
+                }
+                let sub2 = Self::generate_subs(*lhs_arg, *rhs_arg);
+                if sub2.propagate_up() {
+                    return sub2;
+                }
+                SubSearch::None
+            }
+            (lhs, rhs) if lhs == rhs => SubSearch::Tautology,
+            _ => SubSearch::Contradiction,
         }
     }
 }
