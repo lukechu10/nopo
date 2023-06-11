@@ -5,7 +5,7 @@ use super::*;
 
 #[track_caller]
 fn check_root(input: &str, expect: Expect) {
-    let map = FileIdMap::new();
+    let mut map = FileIdMap::new();
     let diagnostics = Diagnostics::default();
     let id = map.create_virtual_file("<test>", input.to_string());
 
@@ -18,7 +18,7 @@ fn check_root(input: &str, expect: Expect) {
 
 #[track_caller]
 fn check_expr(input: &str, expect: Expect) {
-    let map = FileIdMap::new();
+    let mut map = FileIdMap::new();
     let diagnostics = Diagnostics::default();
     let id = map.create_virtual_file("<test>", input.to_string());
 

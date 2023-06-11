@@ -122,6 +122,12 @@ impl<T: fmt::Debug> fmt::Debug for Spanned<T> {
     }
 }
 
+impl<T: fmt::Display> fmt::Display for Spanned<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl<T> std::ops::Deref for Spanned<T> {
     type Target = T;
 
@@ -151,6 +157,10 @@ impl<T> Spanned<T> {
 
     pub fn span(&self) -> Span {
         self.1
+    }
+
+    pub fn as_ref(&self) -> &T {
+        &self.0
     }
 }
 

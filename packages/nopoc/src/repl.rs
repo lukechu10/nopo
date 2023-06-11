@@ -28,10 +28,6 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
         let repl_id = map.create_virtual_file("<repl>", line.to_string());
         let mut parser = crate::parser::Parser::new(repl_id, line, diagnostics.clone());
 
-        if !diagnostics.eprint(&map) {
-            continue;
-        }
-
         let root = match parser.parse_root() {
             Ok(root) => root,
             Err(err) => {
@@ -39,7 +35,10 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
                 continue;
             }
         };
-        eprintln!("Root: {root:#?}");
+        if !diagnostics.eprint(&map) {
+            continue;
+        }
+
         run_resolution_passes(&root);
     }
 

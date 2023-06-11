@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use nopo_diagnostics::Diagnostics;
 use thiserror::Error;
 
-use crate::ast::Root;
+use crate::ast::{Ident, Root};
 use nopo_diagnostics::span::{FileId, FileIdMap};
 
 use self::resolution::run_resolution_passes;
@@ -33,7 +33,7 @@ pub fn compile(entry: &Path) -> Result<(), CompileError> {
     let diagnostics = Diagnostics::default();
     let parse_result = parse_files_recursive(entry, diagnostics.clone())?;
     if !diagnostics.eprint(&parse_result.file_id_map) {
-        return Ok(())
+        return Ok(());
     }
     parse_result.check();
     Ok(())
@@ -56,7 +56,11 @@ pub struct ParsedFile {
 /// * `path` - The path of the file to be parsed.
 /// * `file_id` - The [`FileId`] of the file. This information is inlcuded in the spans produced by
 /// the parser.
-fn parse_file(path: &Path, file_id: FileId, diagnostics: Diagnostics) -> Result<ParsedFile, CompileError> {
+fn parse_file(
+    path: &Path,
+    file_id: FileId,
+    diagnostics: Diagnostics,
+) -> Result<ParsedFile, CompileError> {
     let source = std::fs::read_to_string(path)?;
 
     let extension = path.extension().map(|s| s.to_string_lossy().to_string());
@@ -128,12 +132,15 @@ impl ParseResult {
 pub struct CheckResult {}
 
 /// Get the name of the modules that are declared within this [`Root`].
-fn get_mod_names(ast: &Root) -> Vec<&str> {
-    ast.mod_items.iter().map(|m| &**m.ident).collect()
+fn get_mod_names(ast: &Root) -> Vec<Ident> {
+    ast.mod_items.iter().map(|m| &*m.ident).cloned().collect()
 }
 
 /// Recursively parse all files that can be reached from `entry` (including `entry` itself).
-pub fn parse_files_recursive(entry: &Path, diagnostics: Diagnostics) -> Result<ParseResult, CompileError> {
+pub fn parse_files_recursive(
+    entry: &Path,
+    diagnostics: Diagnostics,
+) -> Result<ParseResult, CompileError> {
     let mut mod_paths = BTreeSet::<ModPath>::new();
     let mut mod_path_map = BTreeMap::new();
     let mut files = BTreeMap::new();

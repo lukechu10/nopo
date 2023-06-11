@@ -8,6 +8,7 @@ clap = { version = "4.1.4", features = ["derive"] }
 nopo-diagnostics = { path = "../nopo-diagnostics" }
 la-arena = "0.3.0"
 logos = "0.12.1"
+smol_str = "0.2.0"
 thiserror = "1.0.38"
 
 [dev-dependencies]

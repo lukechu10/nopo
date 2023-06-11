@@ -2,7 +2,10 @@
 
 pub mod visitor;
 
+use std::fmt;
+
 use la_arena::{Arena, Idx};
+use smol_str::SmolStr;
 
 use crate::parser::lexer::{BinOp, UnaryOp};
 use nopo_diagnostics::span::Spanned;
@@ -27,7 +30,7 @@ pub struct Attributes {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Attribute {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
 }
 
 /// Represents the visibility of an item.
@@ -45,7 +48,7 @@ pub enum Vis {
 pub struct LetItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub params: Vec<Spanned<Param>>,
     pub ret_ty: Option<Spanned<Type>>,
     pub expr: Box<Spanned<Expr>>,
@@ -53,7 +56,7 @@ pub struct LetItem {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Param {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub ty: Option<Spanned<Type>>,
 }
 
@@ -62,7 +65,7 @@ pub struct TypeItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
     /// Identifier of the type constructor.
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub ty_params: Vec<Spanned<TypeParam>>,
     pub def: Spanned<TypeDef>,
 }
@@ -70,7 +73,7 @@ pub struct TypeItem {
 /// Type parameters for the type constructor.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TypeParam {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
 }
 
 /// RHS of a `type` item. A [`TypeItem`] either defines a record type or an ADT (Algebraic Data
@@ -79,6 +82,7 @@ pub struct TypeParam {
 pub enum TypeDef {
     Adt(Spanned<AdtDef>),
     Record(Spanned<RecordDef>),
+    Err,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,7 +92,7 @@ pub struct AdtDef {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct DataConstructor {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub of: Vec<Spanned<Type>>,
 }
 
@@ -99,7 +103,7 @@ pub struct RecordDef {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecordField {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub ty: Box<Spanned<Type>>,
 }
 
@@ -112,11 +116,12 @@ pub enum Type {
     /// The result of the application of a type constructor.
     Constructed(Spanned<ConstructedType>),
     Param(Spanned<TypeParam>),
+    Err,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PathType {
-    pub path: Vec<Spanned<String>>,
+    pub path: Vec<Spanned<Ident>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -163,11 +168,13 @@ pub enum Expr {
     Return(Spanned<ReturnExpr>),
 
     Let(Spanned<LetExpr>),
+
+    Err,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct IdentExpr {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -189,7 +196,7 @@ pub struct RecordExpr {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecordFieldExpr {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub expr: Spanned<Expr>,
 }
 
@@ -244,7 +251,7 @@ pub struct ReturnExpr {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LetExpr {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub ret_ty: Option<Spanned<Type>>,
     pub expr: Box<Spanned<Expr>>,
     pub _in: Box<Spanned<Expr>>,
@@ -252,20 +259,35 @@ pub struct LetExpr {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Binding {
-    pub ident: Spanned<String>,
-    pub ty: Option<Spanned<String>>,
+    pub ident: Spanned<Ident>,
+    pub ty: Option<Spanned<Ident>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ModItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UseItem {
     pub attrs: Spanned<Attributes>,
     pub vis: Spanned<Vis>,
-    pub path: Spanned<String>,
+    pub path: Spanned<Ident>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub enum Ident {
+    Ok(SmolStr),
+    Err,
+}
+
+impl fmt::Display for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Ident::Ok(str) => write!(f, "{str}"),
+            Ident::Err => write!(f, "ERR"),
+        }
+    }
 }

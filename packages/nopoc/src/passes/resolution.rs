@@ -19,8 +19,8 @@ use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::ast::visitor::{walk_expr, walk_let_item, Visitor};
 use crate::ast::{
-    BinaryExpr, ConstructedType, Expr, FnType, IdentExpr, LetExpr, LetId, LetItem, PathType, Root,
-    TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
+    BinaryExpr, ConstructedType, Expr, FnType, Ident, IdentExpr, LetExpr, LetId, LetItem, PathType,
+    Root, TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
 };
 use crate::parser::lexer::BinOp;
 use nopo_diagnostics::span::{Span, Spanned};
@@ -30,11 +30,11 @@ use super::map::NodeMap;
 /// Phase 1: Collect names of all items in module. Also checks for duplicate top-level symbols.
 #[derive(Debug, Default)]
 pub struct CollectIdents {
-    pub let_items: HashMap<String, LetId>,
-    pub type_items: HashMap<String, TypeId>,
+    pub let_items: HashMap<Ident, LetId>,
+    pub type_items: HashMap<Ident, TypeId>,
 }
 impl CollectIdents {
-    fn has_symbol_with_ident(&self, ident: &str) -> bool {
+    fn has_symbol_with_ident(&self, ident: &Ident) -> bool {
         self.let_items.get(ident).is_some() || self.type_items.get(ident).is_some()
     }
 }
@@ -47,7 +47,7 @@ impl Visitor for CollectIdents {
                 *item.ident
             );
         }
-        self.let_items.insert(item.ident.to_string(), idx);
+        self.let_items.insert(item.ident.as_ref().clone(), idx);
     }
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
         if self.has_symbol_with_ident(&item.ident) {
@@ -56,7 +56,7 @@ impl Visitor for CollectIdents {
                 *item.ident
             );
         }
-        self.type_items.insert(item.ident.to_string(), idx);
+        self.type_items.insert(item.ident.as_ref().clone(), idx);
     }
 }
 
@@ -68,7 +68,7 @@ pub struct ResolveTypeContents {
     current_type_id: Option<TypeId>,
     current_let_id: Option<LetId>,
     /// Current list of type args in scope.
-    current_type_params: Vec<String>,
+    current_type_params: Vec<Ident>,
 }
 impl ResolveTypeContents {
     pub fn new(idents: CollectIdents) -> Self {
@@ -120,7 +120,7 @@ impl ResolveTypeContents {
                     }
                 } else if create_ty_params {
                     let param_pos = self.current_type_params.len();
-                    self.current_type_params.push(ident.to_string());
+                    self.current_type_params.push(ident.as_ref().clone());
                     // Can only automatically create a type param on a let.
                     ResolvedType::TypeParamOnLet {
                         item: self.current_let_id.unwrap(),
@@ -131,6 +131,7 @@ impl ResolveTypeContents {
                     ResolvedType::Err
                 }
             }
+            Type::Err => unreachable!(),
         }
     }
 
@@ -175,7 +176,7 @@ pub enum ResolvedType {
 /// Data about a type.
 #[derive(Debug)]
 pub struct TypeData {
-    pub ident: Spanned<String>,
+    pub ident: Spanned<Ident>,
     pub kind: TypeKind,
     pub span: Span,
 }
@@ -186,7 +187,7 @@ pub enum TypeKind {
 }
 #[derive(Debug)]
 pub struct RecordSymbol {
-    pub fields: HashMap<String, ResolvedType>,
+    pub fields: HashMap<Ident, ResolvedType>,
 }
 #[derive(Debug)]
 pub struct AdtSymbol {
@@ -194,20 +195,24 @@ pub struct AdtSymbol {
 }
 #[derive(Debug)]
 pub struct AdtVariant {
-    pub ident: String,
+    pub ident: Ident,
     pub types: Vec<ResolvedType>,
 }
 
 impl Visitor for ResolveTypeContents {
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
         self.current_type_id = Some(idx);
-        self.current_type_params = item.ty_params.iter().map(|x| x.ident.to_string()).collect();
+        self.current_type_params = item
+            .ty_params
+            .iter()
+            .map(|x| x.ident.as_ref().clone())
+            .collect();
         let kind = match &*item.def {
             TypeDef::Adt(adt) => {
                 let mut variants = Vec::new();
                 for variant in &adt.data_constructors {
                     variants.push(AdtVariant {
-                        ident: variant.ident.to_string(),
+                        ident: variant.ident.as_ref().clone(),
                         types: variant
                             .of
                             .iter()
@@ -221,9 +226,15 @@ impl Visitor for ResolveTypeContents {
                 fields: record
                     .fields
                     .iter()
-                    .map(|field| (field.ident.to_string(), self.resolve_type(&field.ty, false)))
+                    .map(|field| {
+                        (
+                            field.ident.as_ref().clone(),
+                            self.resolve_type(&field.ty, false),
+                        )
+                    })
                     .collect(),
             }),
+            TypeDef::Err => unreachable!(),
         };
         self.types.insert(
             idx,
@@ -258,7 +269,7 @@ pub struct ResolveLetContents {
 type BindingId = Idx<BindingData>;
 #[derive(Debug)]
 pub struct BindingData {
-    pub ident: String,
+    pub ident: Ident,
 }
 
 #[derive(Debug)]
@@ -309,7 +320,7 @@ impl ResolveLetContents {
 
     /// Try to resolve a variable binding. If no binding is found, an error is produce and a
     /// [`ResolvedBinding::Err`] is returned.
-    fn resolve_binding(&self, ident: &str) -> ResolvedBinding {
+    fn resolve_binding(&self, ident: &Ident) -> ResolvedBinding {
         // Check local bindings stack first, going in reverse direction.
         for &local_binding in self.local_bindings_stack.iter().rev() {
             if &self.bindings[local_binding].ident == ident {
@@ -320,7 +331,7 @@ impl ResolveLetContents {
         if let Some(binding) = self
             .global_bindings
             .iter()
-            .find(|idx| self.bindings[**idx].ident == ident)
+            .find(|idx| &self.bindings[**idx].ident == ident)
         {
             ResolvedBinding::Ok(*binding)
         } else {
@@ -336,7 +347,7 @@ impl Visitor for ResolveLetContents {
         // Add all the params as bindings in this scope.
         for param in &item.params {
             let binding = self.bindings.alloc(BindingData {
-                ident: param.ident.to_string(),
+                ident: param.ident.as_ref().clone(),
             });
             self.local_bindings_stack.push(binding);
         }
@@ -376,7 +387,7 @@ impl Visitor for ResolveLetContents {
                 self.visit_expr(expr);
                 // No we can add the binding.
                 let binding = self.bindings.alloc(BindingData {
-                    ident: ident.to_string(),
+                    ident: ident.as_ref().clone(),
                 });
                 self.expr_bindings_map
                     .insert(expr, ResolvedBinding::Ok(binding));

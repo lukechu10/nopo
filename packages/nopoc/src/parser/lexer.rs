@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[derive(Debug, Clone, PartialEq, Eq, logos::Logos)]
 pub enum Token {
     // Punctuation
@@ -134,6 +136,73 @@ pub enum Token {
     #[regex(r#"//[^\n]*"#, logos::skip)] // Line comments
     // TODO: block comments
     Err,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Token::LParen => "`(`",
+            Token::RParen => "`)`",
+            Token::LBrace => "`{`",
+            Token::RBrace => "`}`",
+            Token::LBracket => "`[`",
+            Token::RBracket => "`]`",
+            Token::Comma => "`,`",
+            Token::Dot => "`.`",
+            Token::Colon => "`:`",
+            Token::Semi => "`;`",
+            Token::RArrow => "`->`",
+            Token::Prime => "`'`",
+            Token::Plus => "`+`",
+            Token::Minus => "`-`",
+            Token::Star => "`*`",
+            Token::Slash => "`/`",
+            Token::Percent => "`%`",
+            Token::Bang => "`!`",
+            Token::Eq => "`=`",
+            Token::UpdateEq => "`:=`",
+            Token::Lt => "`<`",
+            Token::Gt => "`>`",
+            Token::LtEq => "`<=`",
+            Token::GtEq => "`>=`",
+            Token::Neq => "`!=`",
+            Token::And => "`&`",
+            Token::Or => "`|`",
+            Token::Xor => "`^`",
+            Token::ShiftRight => "`>>`",
+            Token::ShiftLeft => "`<<`",
+            Token::UnsignedShiftRight => "`>>>`",
+            Token::AndAnd => "`&&`",
+            Token::OrOr => "`||`",
+            Token::KwLet => "`let`",
+            Token::KwType => "`type`",
+            Token::KwOf => "`of`",
+            Token::KwIf => "`if`",
+            Token::KwThen => "`then`",
+            Token::KwElse => "`else`",
+            Token::KwWhile => "`while`",
+            Token::KwFor => "`for`",
+            Token::KwIn => "`in`",
+            Token::KwLoop => "`loop`",
+            Token::KwReturn => "`return`",
+            Token::KwBreak => "`break`",
+            Token::KwContinue => "`continue`",
+            Token::KwUse => "`use`",
+            Token::KwMod => "`mod`",
+            Token::KwPub => "`pub`",
+            Token::Ident(_) => "an identifier",
+            Token::LitTrue => "`true`",
+            Token::LitFalse => "`false`",
+            Token::LitInt(_) => "an int literal",
+            Token::LitFloat(_) => "a float literal",
+            Token::LitStr(_) => "a string literal",
+            Token::LitChar(_) => "a char literal",
+            Token::Start => "START",
+            Token::Eof => "end of file",
+            Token::Err => "unknown token",
+        };
+        write!(f, "{s}")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

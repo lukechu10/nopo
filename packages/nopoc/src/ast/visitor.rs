@@ -85,6 +85,7 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
             visitor.visit_expr(expr);
             visitor.visit_expr(_in);
         }
+        Expr::Err => {}
     }
 }
 
