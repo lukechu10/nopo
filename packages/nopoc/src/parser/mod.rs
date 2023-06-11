@@ -5,7 +5,7 @@ use logos::Logos;
 use thiserror::Error;
 
 use crate::ast::*;
-use crate::span::{spanned, FileId, Span, Spanned};
+use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
 
 use self::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
 

@@ -1,10 +1,7 @@
 [workspace]
-members = [
-	"packages/nopo",
-	"packages/nopo-bc",
-	"packages/nopo-vm",
-	"packages/nopoc",
-]
-default-members = ["packages/nopo"]
+members = ["packages/*"]
+default-members = ["packages/nopoc"]
+
+exclude = ["packages/nopo-rt"]
 
 resolver = "2"

@@ -20,7 +20,6 @@ pub mod instr {
     pub enum Op {
         /// MOVE A B => R(A) := R(B)
         MOVE { a: Reg, b: Reg },
-
         /* TODO */
     }
 }

@@ -23,7 +23,7 @@ use crate::ast::{
     TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
 };
 use crate::parser::lexer::BinOp;
-use crate::span::{Span, Spanned};
+use nopo_diagnostics::span::{Span, Spanned};
 
 use super::map::NodeMap;
 

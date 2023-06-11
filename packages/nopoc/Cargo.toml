@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
+nopo-diagnostics = { path = "../nopo-diagnostics" }
 la-arena = "0.3.0"
 logos = "0.12.1"
 thiserror = "1.0.38"

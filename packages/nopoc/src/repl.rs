@@ -4,7 +4,7 @@ use std::error::Error;
 use std::io::{BufRead, Write};
 
 use crate::passes::resolution::run_resolution_passes;
-use crate::span::FileId;
+use nopo_diagnostics::span::FileId;
 
 pub fn start_repl() -> Result<(), Box<dyn Error>> {
     let mut stdin = std::io::stdin().lock();

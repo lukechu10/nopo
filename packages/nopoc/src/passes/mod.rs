@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::ast::Root;
-use crate::span::{FileId, FileIdMap};
+use nopo_diagnostics::span::{FileId, FileIdMap};
 
 use self::resolution::run_resolution_passes;
 

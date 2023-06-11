@@ -1,4 +1,4 @@
-use crate::span::Spanned;
+use nopo_diagnostics::span::Spanned;
 
 use super::*;
 

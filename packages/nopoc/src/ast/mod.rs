@@ -5,7 +5,7 @@ pub mod visitor;
 use la_arena::{Arena, Idx};
 
 use crate::parser::lexer::{BinOp, UnaryOp};
-use crate::span::Spanned;
+use nopo_diagnostics::span::Spanned;
 
 pub type LetId = Idx<Spanned<LetItem>>;
 pub type TypeId = Idx<Spanned<TypeItem>>;

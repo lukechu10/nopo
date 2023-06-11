@@ -8,7 +8,6 @@ pub mod ast;
 pub mod parser;
 pub mod passes;
 pub mod repl;
-pub mod span;
 
 /// The Nopo CLI.
 #[derive(Debug, Parser)]

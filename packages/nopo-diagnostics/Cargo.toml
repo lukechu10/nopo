@@ -1,0 +1,8 @@
+[package]
+name = "nopo-diagnostics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ariadne = "0.3.0"
+nopo-diagnostics-derive = { path = "../nopo-diagnostics-derive" }

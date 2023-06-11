@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 
 #[derive(Debug, Default, Clone)]
 pub struct FileIdMap {
@@ -19,6 +19,10 @@ impl FileIdMap {
         self.counter += 1;
         self.map.insert(file_id, path);
         file_id
+    }
+
+    pub fn get_file_id(&self, file_id: FileId) -> &Path {
+        &self.map[&file_id]
     }
 }
 
@@ -39,6 +43,7 @@ pub struct Span {
     pub start: u32,
     /// The index of the first character after the span.
     pub end: u32,
+    /// The file in which this span lives.
     pub file_id: FileId,
 }
 
