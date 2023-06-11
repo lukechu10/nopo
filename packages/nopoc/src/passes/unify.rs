@@ -108,7 +108,11 @@ impl Visitor for UnifyTypes {
             for (var, sub) in &solutions {
                 ty.apply_sub(*var, sub.clone());
             }
-            eprintln!("{}\t\t: {}", self.bindings[*id].ident, ty.pretty(&self.type_item_map));
+            eprintln!(
+                "{}\t\t: {}",
+                self.bindings[*id].ident,
+                ty.pretty(&self.type_item_map)
+            );
         }
     }
 
@@ -184,17 +188,27 @@ impl Visitor for UnifyTypes {
     }
 
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        match &**expr {
-            Expr::Let(let_expr) => {
-                let binding = self.bindings_map.let_exprs[&**let_expr];
-                let c_ty = if let Some(ret_ty) = &let_expr.ret_ty {
-                    self.type_map[&**ret_ty].clone()
-                } else {
-                    self.state.new_type_var()
-                };
-                self.state.binding_types_map.insert(binding, c_ty);
-            }
-            _ => {}
+        if let Expr::Let(let_expr) = &**expr {
+            let binding = self.bindings_map.let_exprs[&**let_expr];
+            let c_ret = if let Some(ret_ty) = &let_expr.ret_ty {
+                spanned(ret_ty.span(), self.type_map[&**ret_ty].clone())
+            } else {
+                spanned(let_expr.ident.span(), self.state.new_type_var())
+            };
+            self.state
+                .binding_types_map
+                .insert(binding, c_ret.clone().unspan());
+            // Constrain let binding expression.
+            self.visit_expr(&let_expr.expr);
+            let c_expr = self.state.expr_types_map[&**let_expr.expr].clone();
+            self.state
+                .constraints
+                .push(Constraint(c_ret, spanned(let_expr.expr.span(), c_expr)));
+
+            self.visit_expr(&let_expr._in);
+            let c_in = self.state.expr_types_map[&**let_expr._in].clone();
+            self.state.expr_types_map.insert(expr, c_in);
+            return;
         }
 
         // This ensures that self.state.expr_types_map is instantiated for all child nodes.
@@ -323,7 +337,7 @@ impl Visitor for UnifyTypes {
             Expr::For(_) => todo!(),
             Expr::Loop(_) => todo!(),
             Expr::Return(_) => todo!(),
-            Expr::Let(let_expr) => self.state.expr_types_map[&let_expr.expr].clone(),
+            Expr::Let(_) => unreachable!(),
             Expr::Err => unreachable!(),
         };
         self.state.expr_types_map.insert(expr, c_ty);
@@ -335,7 +349,7 @@ impl UnifyTypes {
     fn solve(&mut self) -> HashMap<u32, ResolvedType> {
         let mut constraints = self.state.constraints.clone();
         let diagnostics: &mut Diagnostics = &mut self.diagnostics;
-        let mut solutions = HashMap::new();
+        let mut solutions = HashMap::<u32, ResolvedType>::new();
         loop {
             let substitutions = constraints
                 .iter()
@@ -348,24 +362,16 @@ impl UnifyTypes {
                 })
                 .collect::<Vec<_>>();
 
-            // If there are no substitutions to be made left, we are done.
-            if !substitutions
-                .iter()
-                .any(|(_, sub)| matches!(sub, SubSearch::Sub(_, _)))
-            {
-                break;
-            }
-
             // Remove all the constraints that are tautologies.
             constraints = substitutions
                 .iter()
-                .filter(|(_, sub)| sub == &SubSearch::Tautology)
+                .filter(|(_, sub)| sub != &SubSearch::Tautology)
                 .map(|(c, _)| c)
                 .cloned()
                 .collect();
 
             // Handle all substitution errors.
-            for (constraint, substitution) in substitutions {
+            for (constraint, substitution) in substitutions.clone() {
                 match substitution {
                     SubSearch::Contradiction => {
                         diagnostics.add(CouldNotUnifyTypes {
@@ -381,7 +387,13 @@ impl UnifyTypes {
                         });
                     }
                     SubSearch::Sub(i, c_ty) => {
-                        apply_substitution(&mut constraints, i, c_ty.clone());
+                        // Substitute in all constraints.
+                        apply_subs(&mut constraints, i, c_ty.clone());
+                        // Substitute in all existing solutions.
+                        for (_, solution) in &mut solutions {
+                            solution.apply_sub(i, c_ty.clone());
+                        }
+
                         solutions.insert(i, c_ty);
                     }
                     SubSearch::InfiniteType => diagnostics.add(CannotCreateInfiniteType {
@@ -391,6 +403,14 @@ impl UnifyTypes {
                     SubSearch::Tautology => {}
                 }
             }
+
+            // If there are no substitutions to be made left, we are done.
+            if !substitutions
+                .iter()
+                .any(|(_, sub)| matches!(sub, SubSearch::Sub(_, _)))
+            {
+                break;
+            }
         }
 
         solutions
@@ -398,14 +418,14 @@ impl UnifyTypes {
 }
 
 /// Substitute the type variable with id `i` with `c_ty`.
-fn apply_substitution(constraints: &mut [Constraint], i: u32, c_ty: ResolvedType) {
+fn apply_subs(constraints: &mut [Constraint], i: u32, c_ty: ResolvedType) {
     for c in constraints {
         c.0.apply_sub(i, c_ty.clone());
         c.1.apply_sub(i, c_ty.clone());
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum SubSearch {
     /// Error, cannot unify types.
     Contradiction,

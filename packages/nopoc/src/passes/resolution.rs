@@ -282,11 +282,7 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
             ResolvedType::TypeParamOnType {
                 constructor,
                 param_pos,
-            } => write!(
-                f,
-                "'{}",
-                self.1[*constructor].ty_params[*param_pos].ident
-            )?,
+            } => write!(f, "'{}", self.1[*constructor].ty_params[*param_pos].ident)?,
             // TODO: display actual name.
             ResolvedType::TypeParamOnLet { item: _, param_pos } => write!(f, "'{param_pos}")?,
             ResolvedType::Bool => write!(f, "bool")?,
@@ -294,7 +290,7 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
             ResolvedType::Float => write!(f, "float")?,
             ResolvedType::String => write!(f, "string")?,
             ResolvedType::Char => write!(f, "char")?,
-            ResolvedType::Tmp(_) => write!(f, "{{unknown}}")?,
+            ResolvedType::Tmp(i) => write!(f, "{{unknown:{i}}}")?,
             ResolvedType::Err => write!(f, "ERR")?,
         }
 
