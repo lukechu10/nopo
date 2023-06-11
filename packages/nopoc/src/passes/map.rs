@@ -11,6 +11,10 @@ pub struct NodeMap<N, T> {
 }
 
 impl<N, T> NodeMap<N, T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Insert a new value for the given AST node.
     pub fn insert(&mut self, key: &N, value: T) -> Option<T> {
         self.map.insert(key as *const N, value)

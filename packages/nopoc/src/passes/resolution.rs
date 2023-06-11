@@ -1,4 +1,4 @@
-//! Symbol resolution and type-checking.
+//! Symbol resolution.
 //!
 //! This happens in phases:
 //!
@@ -18,10 +18,10 @@ use std::collections::HashMap;
 use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::{Diagnostics, IntoReport};
 
-use crate::ast::visitor::{walk_expr, walk_let_item, Visitor};
+use crate::ast::visitor::{walk_expr, walk_let_item, walk_root, Visitor};
 use crate::ast::{
-    BinaryExpr, ConstructedType, Expr, FnType, Ident, IdentExpr, LetExpr, LetId, LetItem, PathType,
-    Root, TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
+    BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, LetExpr, LetId,
+    LetItem, Param, PathType, Root, TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
 };
 use crate::parser::lexer::BinOp;
 use nopo_diagnostics::span::{spanned, Span, Spanned};
@@ -206,6 +206,8 @@ pub enum ResolvedType {
         /// The position where this type parameter appears in the signature of the let item.
         param_pos: usize,
     },
+    /// Used for expressions that have not had their type inferred yet.
+    Tmp(u32),
     /// Type could not be resolved.
     Err,
 }
@@ -290,20 +292,31 @@ impl Visitor for ResolveTypeContents {
 pub struct ResolveLetContents {
     type_contents: ResolveTypeContents,
     bindings: Arena<BindingData>,
-    pub global_bindings_map: HashMap<LetId, BindingId>,
     global_bindings: Vec<BindingId>,
     local_bindings_stack: Vec<BindingId>,
-    /// Mapping from identifier and let expressions to the associated [`BindingId`].
-    ///
-    /// If the expression is an identifier, the binding id is the binding which this identifier
-    /// references. If the expression is a `let` expression, the binding id is the binding which is
-    /// created by this expression.
-    expr_bindings_map: NodeMap<Expr, ResolvedBinding>,
+    /// Mapping from AST nodes to bindings.
+    bindings_map: BindingsMap,
+    /// Mapping from type items too the types that they represent.
     type_map: NodeMap<Type, ResolvedType>,
     diagnostics: Diagnostics,
 }
 
-type BindingId = Idx<BindingData>;
+#[derive(Debug, Default)]
+pub struct BindingsMap {
+    /// Mapping from identifiers to their bindings.
+    idents: NodeMap<IdentExpr, ResolvedBinding>,
+    /// Mapping from data-constructors to their bindings. Data-constructors are treated just like
+    /// functions.
+    data_constructors: NodeMap<DataConstructor, BindingId>,
+    /// Mapping from let params to their bindings.
+    params: NodeMap<Param, BindingId>,
+    /// Mapping from let items to their bindings.
+    let_items: NodeMap<LetItem, BindingId>,
+    /// Mapping from let expressions to their bindings.
+    let_exprs: NodeMap<LetExpr, BindingId>,
+}
+
+pub type BindingId = Idx<BindingData>;
 #[derive(Debug)]
 pub struct BindingData {
     pub ident: Ident,
@@ -317,40 +330,12 @@ pub enum ResolvedBinding {
 
 impl ResolveLetContents {
     pub fn new(type_contents: ResolveTypeContents, diagnostics: Diagnostics) -> Self {
-        let mut bindings = Arena::new();
-        let mut global_bindings_map = HashMap::new();
-        let mut global_bindings = Vec::new();
-
-        // Create a binding for all the global let items.
-        for (ident, idx) in &type_contents.idents.let_items {
-            let binding = bindings.alloc(BindingData {
-                ident: ident.clone(),
-            });
-            global_bindings_map.insert(*idx, binding);
-            global_bindings.push(binding);
-        }
-        // Create a binding for all data constructors.
-        for (_idx, type_data) in type_contents.types.iter() {
-            match &type_data.kind {
-                TypeKind::Adt(adt) => {
-                    for variant in &adt.variants {
-                        let binding = bindings.alloc(BindingData {
-                            ident: variant.ident.clone(),
-                        });
-                        global_bindings.push(binding);
-                    }
-                }
-                _ => {}
-            }
-        }
-
         Self {
             type_contents,
-            bindings,
-            global_bindings_map,
-            global_bindings,
+            bindings: Arena::new(),
+            global_bindings: Vec::new(),
             local_bindings_stack: Vec::new(),
-            expr_bindings_map: NodeMap::default(),
+            bindings_map: BindingsMap::default(),
             type_map: NodeMap::default(),
             diagnostics,
         }
@@ -383,6 +368,40 @@ impl ResolveLetContents {
 }
 
 impl Visitor for ResolveLetContents {
+    /// Create all the global bindings here and all the local bindings in other visitor methods.
+    fn visit_root(&mut self, root: &Root) {
+        // Create a binding for all the global let items.
+        for (_idx, let_item) in root.let_items.iter() {
+            let binding = self.bindings.alloc(BindingData {
+                ident: let_item.ident.as_ref().clone(),
+            });
+            self.bindings_map.let_items.insert(let_item, binding);
+            self.global_bindings.push(binding);
+        }
+
+        // Create a binding for all data constructors.
+        for (_idx, type_item) in root.type_items.iter() {
+            match &*type_item.def {
+                TypeDef::Adt(adt) => {
+                    for data_constructor in &adt.data_constructors {
+                        let binding = self.bindings.alloc(BindingData {
+                            ident: data_constructor.ident.as_ref().clone(),
+                        });
+                        self.bindings_map
+                            .data_constructors
+                            .insert(data_constructor, binding);
+                        self.global_bindings.push(binding);
+                    }
+                }
+                TypeDef::Record(_) => {}
+                TypeDef::Err => unreachable!(),
+            }
+        }
+
+        // We can create the local bindings now that we have all the global ones.
+        walk_root(self, root);
+    }
+
     fn visit_let_item(&mut self, idx: LetId, item: &Spanned<LetItem>) {
         self.type_contents.current_let_id = Some(idx);
         // Add all the params as bindings in this scope.
@@ -390,6 +409,7 @@ impl Visitor for ResolveLetContents {
             let binding = self.bindings.alloc(BindingData {
                 ident: param.ident.as_ref().clone(),
             });
+            self.bindings_map.params.insert(param, binding);
             self.local_bindings_stack.push(binding);
         }
         walk_let_item(self, item);
@@ -416,7 +436,7 @@ impl Visitor for ResolveLetContents {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &**expr {
             Expr::Let(Spanned(
-                LetExpr {
+                let_expr @ LetExpr {
                     ident,
                     ret_ty,
                     expr,
@@ -426,17 +446,17 @@ impl Visitor for ResolveLetContents {
             )) => {
                 // We cannot access the binding inside the expression itself.
                 self.visit_expr(expr);
-                // No we can add the binding.
+                // Now we can add the binding.
                 let binding = self.bindings.alloc(BindingData {
                     ident: ident.as_ref().clone(),
                 });
-                self.expr_bindings_map
-                    .insert(expr, ResolvedBinding::Ok(binding));
+                self.bindings_map.let_exprs.insert(let_expr, binding);
+
                 self.local_bindings_stack.push(binding);
                 self.visit_expr(_in);
                 self.local_bindings_stack.pop();
 
-                // Resolve the types of the params and ret.
+                // Resolve the types of ret.
                 if let Some(ret_ty) = ret_ty {
                     let resolved_ty = self.type_contents.resolve_type(ret_ty, false);
                     self.type_map.insert(ret_ty, resolved_ty);
@@ -447,10 +467,12 @@ impl Visitor for ResolveLetContents {
                 // the type of the LHS.
                 self.visit_expr(lhs);
             }
-            Expr::Ident(Spanned(IdentExpr { ident }, _)) => {
+            Expr::Ident(Spanned(ident_expr @ IdentExpr { ident }, _)) => {
                 // Lookup the binding for this ident.
                 let resolved_binding = self.resolve_binding(&ident);
-                self.expr_bindings_map.insert(expr, resolved_binding);
+                self.bindings_map
+                    .idents
+                    .insert(ident_expr, resolved_binding);
             }
             _ => walk_expr(self, expr),
         }

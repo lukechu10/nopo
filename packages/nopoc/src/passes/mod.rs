@@ -1,5 +1,6 @@
 pub mod map;
 pub mod resolution;
+pub mod unify;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
