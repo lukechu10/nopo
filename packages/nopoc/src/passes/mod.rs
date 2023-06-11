@@ -17,8 +17,6 @@ use self::resolution::run_resolution_passes;
 pub enum CompileError {
     #[error("IO error: {0}.")]
     Io(#[from] std::io::Error),
-    #[error("Parse error: {0}.")]
-    Parse(#[from] crate::parser::ParseError),
     #[error("File `{0}` has wrong file extension. Nopo source files should end with the `.nopo` extension.")]
     BadFileExtension(PathBuf),
     #[error("Circular module declarations.")]
@@ -70,7 +68,7 @@ fn parse_file(
     let name = path.file_stem().unwrap().to_string_lossy().to_string();
 
     let mut parser = crate::parser::Parser::new(file_id, &source, diagnostics);
-    let ast = parser.parse_root()?;
+    let ast = parser.parse_root();
     Ok(ParsedFile {
         path: path.to_path_buf(),
         name,

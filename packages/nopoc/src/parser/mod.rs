@@ -5,7 +5,6 @@ use logos::Logos;
 use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, IntoReport};
 use smol_str::SmolStr;
-use thiserror::Error;
 
 use self::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
 use crate::ast::*;
@@ -27,9 +26,6 @@ pub struct Parser {
     file_id: FileId,
     diagnostics: Diagnostics,
 }
-
-#[derive(Error, Debug)]
-pub enum ParseError {}
 
 #[derive(IntoReport)]
 #[kind("error")]
@@ -85,8 +81,6 @@ struct InvalidCharLiteral {
     #[label(message = "char literal should only contain one character")]
     char: Spanned<String>,
 }
-
-pub type Result<T, E = ParseError> = std::result::Result<T, E>;
 
 /// A temporary struct used to store the start of a span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,13 +217,13 @@ impl Parser {
         });
     }
 
-    pub fn parse_root(&mut self) -> Result<Root> {
+    pub fn parse_root(&mut self) -> Root {
         let mut let_items = Arena::new();
         let mut type_items = Arena::new();
         let mut mod_items = Vec::new();
         let mut use_items = Vec::new();
         while !self.eof() {
-            let attrs = self.parse_attributes()?;
+            let attrs = self.parse_attributes();
             // If we see a visibility keyword, look at the token after that to decide which branch
             // to parse.
             let kw = match self.peek_next() {
@@ -238,19 +232,19 @@ impl Parser {
             };
             match kw {
                 Token::KwLet => {
-                    let item = self.parse_let_item(attrs)?;
+                    let item = self.parse_let_item(attrs);
                     let_items.alloc(item);
                 }
                 Token::KwType => {
-                    let item = self.parse_type_item(attrs)?;
+                    let item = self.parse_type_item(attrs);
                     type_items.alloc(item);
                 }
                 Token::KwMod => {
-                    let item = self.parse_mod_item(attrs)?;
+                    let item = self.parse_mod_item(attrs);
                     mod_items.push(item);
                 }
                 Token::KwUse => {
-                    let item = self.parse_use_item(attrs)?;
+                    let item = self.parse_use_item(attrs);
                     use_items.push(item);
                 }
                 _ => {
@@ -262,32 +256,32 @@ impl Parser {
                 }
             }
         }
-        Ok(Root {
+        Root {
             let_items,
             type_items,
             mod_items,
             use_items,
-        })
+        }
     }
 
-    pub fn parse_attributes(&mut self) -> Result<Spanned<Attributes>> {
+    pub fn parse_attributes(&mut self) -> Spanned<Attributes> {
         let start = self.start();
         let mut attrs = Vec::new();
         while self.peek_next() == &Token::LBracket {
-            attrs.push(self.parse_attribute()?);
+            attrs.push(self.parse_attribute());
         }
-        Ok(self.finish(start, Attributes { attrs }))
+        self.finish(start, Attributes { attrs })
     }
 
-    pub fn parse_attribute(&mut self) -> Result<Spanned<Attribute>> {
+    pub fn parse_attribute(&mut self) -> Spanned<Attribute> {
         let start = self.start();
         self.expect(Token::LBracket);
         let ident = self.parse_ident();
         self.expect(Token::RBracket);
-        Ok(self.finish(start, Attribute { ident }))
+        self.finish(start, Attribute { ident })
     }
 
-    pub fn parse_vis(&mut self) -> Result<Spanned<Vis>> {
+    pub fn parse_vis(&mut self) -> Spanned<Vis> {
         let start = self.start();
         let vis = match self.peek_next() {
             Token::KwPub => {
@@ -296,32 +290,32 @@ impl Parser {
             }
             _ => Vis::Priv,
         };
-        Ok(self.finish(start, vis))
+        self.finish(start, vis)
     }
 
-    pub fn parse_let_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<LetItem>> {
+    pub fn parse_let_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<LetItem> {
         let start = self.start();
-        let vis = self.parse_vis()?;
+        let vis = self.parse_vis();
         self.expect(Token::KwLet);
         let ident = self.parse_ident();
 
         let mut params = Vec::new();
         while let Token::LParen | Token::Ident(_) = self.peek_next() {
-            params.push(self.parse_param()?);
+            params.push(self.parse_param());
         }
 
         let ret_ty = if self.peek_next() == &Token::Colon {
             self.expect(Token::Colon);
-            Some(self.parse_type()?)
+            Some(self.parse_type())
         } else {
             None
         };
 
         self.expect(Token::Eq);
-        let expr = self.parse_expr()?;
+        let expr = self.parse_expr();
 
         self.expect(Token::Semi);
-        Ok(self.finish(
+        self.finish(
             start,
             LetItem {
                 attrs,
@@ -331,42 +325,42 @@ impl Parser {
                 params,
                 expr: Box::new(expr),
             },
-        ))
+        )
     }
 
-    pub fn parse_param(&mut self) -> Result<Spanned<Param>> {
+    pub fn parse_param(&mut self) -> Spanned<Param> {
         let start = self.start();
         if self.peek_next() == &Token::LParen {
             self.expect(Token::LParen);
             let ident = self.parse_ident();
             self.expect(Token::Colon);
-            let ty = self.parse_type()?;
+            let ty = self.parse_type();
             self.expect(Token::RParen);
-            Ok(self.finish(
+            self.finish(
                 start,
                 Param {
                     ident,
                     ty: Some(ty),
                 },
-            ))
+            )
         } else {
             let ident = self.parse_ident();
-            Ok(self.finish(start, Param { ident, ty: None }))
+            self.finish(start, Param { ident, ty: None })
         }
     }
 
-    pub fn parse_type_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<TypeItem>> {
+    pub fn parse_type_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<TypeItem> {
         let start = self.start();
-        let vis = self.parse_vis()?;
+        let vis = self.parse_vis();
         self.expect(Token::KwType);
         let ident = self.parse_ident();
         let mut ty_params = Vec::new();
         while self.peek_next() == &Token::Prime {
-            ty_params.push(self.parse_type_param()?);
+            ty_params.push(self.parse_type_param());
         }
         self.expect(Token::Eq);
-        let def = self.parse_type_def()?;
-        Ok(self.finish(
+        let def = self.parse_type_def();
+        self.finish(
             start,
             TypeItem {
                 attrs,
@@ -375,26 +369,26 @@ impl Parser {
                 ty_params,
                 def,
             },
-        ))
+        )
     }
 
-    pub fn parse_type_param(&mut self) -> Result<Spanned<TypeParam>> {
+    pub fn parse_type_param(&mut self) -> Spanned<TypeParam> {
         let start = self.start();
         self.expect(Token::Prime);
         let ident = self.parse_ident();
-        Ok(self.finish(start, TypeParam { ident }))
+        self.finish(start, TypeParam { ident })
     }
 
-    pub fn parse_type_def(&mut self) -> Result<Spanned<TypeDef>> {
+    pub fn parse_type_def(&mut self) -> Spanned<TypeDef> {
         let start = self.start();
         match self.peek_next() {
             Token::LBrace => {
-                let def = self.parse_record_def()?;
-                Ok(self.finish(start, TypeDef::Record(def)))
+                let def = self.parse_record_def();
+                self.finish(start, TypeDef::Record(def))
             }
             Token::Ident(_) => {
-                let def = self.parse_adt_def()?;
-                Ok(self.finish(start, TypeDef::Adt(def)))
+                let def = self.parse_adt_def();
+                self.finish(start, TypeDef::Adt(def))
             }
             token => {
                 self.diagnostics.add(ExpectedTypeDef {
@@ -402,18 +396,18 @@ impl Parser {
                     unexpected: spanned(self.peek_span(), token.clone()),
                 });
                 let _ = self.get_next();
-                Ok(self.finish(start, TypeDef::Err))
+                self.finish(start, TypeDef::Err)
             }
         }
     }
 
-    pub fn parse_record_def(&mut self) -> Result<Spanned<RecordDef>> {
+    pub fn parse_record_def(&mut self) -> Spanned<RecordDef> {
         let start = self.start();
         self.expect(Token::LBrace);
 
         let mut fields = Vec::new();
         while let Token::Ident(_) = self.peek_next() {
-            fields.push(self.parse_record_field()?);
+            fields.push(self.parse_record_field());
             if self.peek_next() != &Token::Comma {
                 break;
             } else {
@@ -423,67 +417,67 @@ impl Parser {
 
         self.expect(Token::RBrace);
 
-        Ok(self.finish(start, RecordDef { fields }))
+        self.finish(start, RecordDef { fields })
     }
 
-    pub fn parse_record_type(&mut self) -> Result<Spanned<RecordDef>> {
+    pub fn parse_record_type(&mut self) -> Spanned<RecordDef> {
         let start = self.start();
         self.expect(Token::LBrace);
 
         let mut fields = Vec::new();
         while let Token::Ident(_) = self.peek_next() {
-            fields.push(self.parse_record_field()?);
+            fields.push(self.parse_record_field());
         }
 
         self.expect(Token::RBrace);
 
-        Ok(self.finish(start, RecordDef { fields }))
+        self.finish(start, RecordDef { fields })
     }
 
-    pub fn parse_record_field(&mut self) -> Result<Spanned<RecordField>> {
+    pub fn parse_record_field(&mut self) -> Spanned<RecordField> {
         let start = self.start();
         let ident = self.parse_ident();
         self.expect(Token::Colon);
-        let ty = self.parse_type()?;
-        Ok(self.finish(
+        let ty = self.parse_type();
+        self.finish(
             start,
             RecordField {
                 ident,
                 ty: Box::new(ty),
             },
-        ))
+        )
     }
 
-    pub fn parse_adt_def(&mut self) -> Result<Spanned<AdtDef>> {
+    pub fn parse_adt_def(&mut self) -> Spanned<AdtDef> {
         let start = self.start();
-        let first = self.parse_data_constructor()?;
+        let first = self.parse_data_constructor();
         let mut data_constructors = vec![first];
         while self.peek_next() == &Token::Or {
             self.expect(Token::Or);
-            data_constructors.push(self.parse_data_constructor()?);
+            data_constructors.push(self.parse_data_constructor());
         }
 
-        Ok(self.finish(start, AdtDef { data_constructors }))
+        self.finish(start, AdtDef { data_constructors })
     }
 
-    pub fn parse_data_constructor(&mut self) -> Result<Spanned<DataConstructor>> {
+    pub fn parse_data_constructor(&mut self) -> Spanned<DataConstructor> {
         let start = self.start();
         let ident = self.parse_ident();
         let of = if self.peek_next() == &Token::KwOf {
             self.expect(Token::KwOf);
             let mut of = Vec::new();
             while self.peek_is_type() {
-                of.push(self.parse_type()?);
+                of.push(self.parse_type());
             }
             of
         } else {
             Vec::new()
         };
 
-        Ok(self.finish(start, DataConstructor { ident, of }))
+        self.finish(start, DataConstructor { ident, of })
     }
 
-    pub fn parse_type(&mut self) -> Result<Spanned<Type>> {
+    pub fn parse_type(&mut self) -> Spanned<Type> {
         self.parse_type_with_min_bp(0)
     }
 
@@ -494,34 +488,34 @@ impl Parser {
         )
     }
 
-    pub fn parse_primary_type(&mut self) -> Result<Spanned<Type>> {
+    pub fn parse_primary_type(&mut self) -> Spanned<Type> {
         let start = self.start();
         match self.peek_next() {
             Token::LParen => {
                 self.expect(Token::LParen);
-                let ty = self.parse_type()?;
+                let ty = self.parse_type();
                 if self.peek_next() == &Token::Comma {
                     // Parse a tuple.
                     self.expect(Token::Comma);
                     let mut fields = vec![ty];
                     while self.peek_is_type() {
-                        fields.push(self.parse_type()?);
+                        fields.push(self.parse_type());
                     }
                     self.expect(Token::RParen);
-                    Ok(self.finish(start, Type::Tuple(self.finish(start, TupleType { fields }))))
+                    self.finish(start, Type::Tuple(self.finish(start, TupleType { fields })))
                 } else {
                     // This is just a parenthesized type.
                     self.expect(Token::RParen);
-                    Ok(ty)
+                    ty
                 }
             }
             Token::Ident(_) => {
-                let path = self.parse_path_type()?;
-                Ok(self.finish(start, Type::Path(path)))
+                let path = self.parse_path_type();
+                self.finish(start, Type::Path(path))
             }
             Token::Prime => {
-                let ty = self.parse_type_param()?;
-                Ok(self.finish(start, Type::Param(ty)))
+                let ty = self.parse_type_param();
+                self.finish(start, Type::Param(ty))
             }
             _ => {
                 self.diagnostics.add(ExpectedType {
@@ -529,14 +523,14 @@ impl Parser {
                     unexpected: spanned(self.peek_span(), self.peek_next().clone()),
                 });
                 let _ = self.get_next(); // TODO: better error recovery
-                Ok(self.finish(start, Type::Err))
+                self.finish(start, Type::Err)
             }
         }
     }
 
-    pub fn parse_type_with_min_bp(&mut self, min_bp: u32) -> Result<Spanned<Type>> {
+    pub fn parse_type_with_min_bp(&mut self, min_bp: u32) -> Spanned<Type> {
         let start = self.start();
-        let mut lhs = self.parse_primary_type()?;
+        let mut lhs = self.parse_primary_type();
 
         loop {
             let op = if self.peek_next() == &Token::RArrow {
@@ -553,7 +547,7 @@ impl Parser {
                 break;
             }
 
-            let rhs = self.parse_type_with_min_bp(r_bp)?;
+            let rhs = self.parse_type_with_min_bp(r_bp);
             lhs = match op {
                 TypeBinOp::Apply => self.finish(
                     start,
@@ -578,10 +572,10 @@ impl Parser {
             }
         }
 
-        Ok(lhs)
+        lhs
     }
 
-    pub fn parse_path_type(&mut self) -> Result<Spanned<PathType>> {
+    pub fn parse_path_type(&mut self) -> Spanned<PathType> {
         let start = self.start();
         let initial = self.parse_ident();
         let mut path = vec![initial];
@@ -590,10 +584,10 @@ impl Parser {
             path.push(self.parse_ident());
         }
 
-        Ok(self.finish(start, PathType { path }))
+        self.finish(start, PathType { path })
     }
 
-    pub fn parse_expr(&mut self) -> Result<Spanned<Expr>> {
+    pub fn parse_expr(&mut self) -> Spanned<Expr> {
         self.parse_expr_with_min_bp(0)
     }
 
@@ -619,52 +613,52 @@ impl Parser {
         }
     }
 
-    pub fn parse_primary_expr(&mut self) -> Result<Spanned<Expr>> {
+    pub fn parse_primary_expr(&mut self) -> Spanned<Expr> {
         let start = self.start();
         match self.peek_next() {
             Token::Ident(_) => {
                 let ident = self.parse_ident();
-                Ok(self.finish(start, Expr::Ident(self.finish(start, IdentExpr { ident }))))
+                self.finish(start, Expr::Ident(self.finish(start, IdentExpr { ident })))
             }
             Token::LBrace => {
                 // We need to check if this is a block expression or record expression.
                 match (self.peek_nth(2), self.peek_nth(3)) {
                     (Token::Ident(_), Token::Eq) => {
-                        let record_expr = self.parse_record_expr()?;
-                        Ok(self.finish(start, Expr::Record(record_expr)))
+                        let record_expr = self.parse_record_expr();
+                        self.finish(start, Expr::Record(record_expr))
                     }
                     _ => {
-                        let block = self.parse_block_expr()?;
-                        Ok(self.finish(start, Expr::Block(block)))
+                        let block = self.parse_block_expr();
+                        self.finish(start, Expr::Block(block))
                     }
                 }
             }
             Token::LParen => {
-                let expr = self.parse_tuple_expr()?;
-                Ok(expr)
+                let expr = self.parse_tuple_expr();
+                expr
             }
             Token::LitTrue => {
                 let _ = self.get_next();
-                Ok(self.finish(start, Expr::LitBool(true)))
+                self.finish(start, Expr::LitBool(true))
             }
             Token::LitFalse => {
                 let _ = self.get_next();
-                Ok(self.finish(start, Expr::LitBool(false)))
+                self.finish(start, Expr::LitBool(false))
             }
             Token::LitInt(int) => {
                 let int = *int;
                 let _ = self.get_next();
-                Ok(self.finish(start, Expr::LitInt(int)))
+                self.finish(start, Expr::LitInt(int))
             }
             Token::LitFloat(float) => {
                 let float = float.clone();
                 let _ = self.get_next();
-                Ok(self.finish(start, Expr::LitFloat(float)))
+                self.finish(start, Expr::LitFloat(float))
             }
             Token::LitStr(str) => {
                 let str = str.clone();
                 let _ = self.get_next();
-                Ok(self.finish(start, Expr::LitStr(str)))
+                self.finish(start, Expr::LitStr(str))
             }
             Token::LitChar(str) => {
                 let str = str.clone();
@@ -672,46 +666,46 @@ impl Parser {
                 let mut chars = str.chars(); // TODO: escape codes
                 if let Some(char) = chars.next() {
                     if chars.next().is_none() {
-                        return Ok(self.finish(start, Expr::LitChar(char)));
+                        return self.finish(start, Expr::LitChar(char));
                     }
                 }
                 self.diagnostics.add(InvalidCharLiteral {
                     span: self.end(start),
                     char: self.finish(start, str),
                 });
-                Ok(self.finish(start, Expr::Err))
+                self.finish(start, Expr::Err)
             }
             Token::KwIf => {
-                let expr = self.parse_if_expr()?;
-                Ok(self.finish(start, Expr::If(expr)))
+                let expr = self.parse_if_expr();
+                self.finish(start, Expr::If(expr))
             }
             Token::KwFor => {
-                let expr = self.parse_for_expr()?;
-                Ok(self.finish(start, Expr::For(expr)))
+                let expr = self.parse_for_expr();
+                self.finish(start, Expr::For(expr))
             }
             Token::KwWhile => {
-                let expr = self.parse_while_expr()?;
-                Ok(self.finish(start, Expr::While(expr)))
+                let expr = self.parse_while_expr();
+                self.finish(start, Expr::While(expr))
             }
             Token::KwLoop => {
-                let expr = self.parse_loop_expr()?;
-                Ok(self.finish(start, Expr::Loop(expr)))
+                let expr = self.parse_loop_expr();
+                self.finish(start, Expr::Loop(expr))
             }
             Token::KwLet => {
-                let expr = self.parse_let_expr()?;
-                Ok(self.finish(start, Expr::Let(expr)))
+                let expr = self.parse_let_expr();
+                self.finish(start, Expr::Let(expr))
             }
             Token::KwReturn => {
-                let expr = self.parse_return_expr()?;
-                Ok(self.finish(start, Expr::Return(expr)))
+                let expr = self.parse_return_expr();
+                self.finish(start, Expr::Return(expr))
             }
             tok if UnaryOp::try_from(tok.clone()).is_ok() => {
                 let start = self.start();
                 let op = UnaryOp::try_from(tok.clone()).unwrap();
                 let op = self.finish(start, op);
                 let _ = self.get_next();
-                let expr = self.parse_expr()?;
-                Ok(self.finish(
+                let expr = self.parse_expr();
+                self.finish(
                     start,
                     Expr::Unary(self.finish(
                         start,
@@ -720,7 +714,7 @@ impl Parser {
                             expr: Box::new(expr),
                         },
                     )),
-                ))
+                )
             }
             _ => {
                 self.diagnostics.add(ExpectedExpr {
@@ -728,14 +722,14 @@ impl Parser {
                     unexpected: spanned(self.peek_span(), self.peek_next().clone()),
                 });
                 let _ = self.get_next(); // TODO: better error recovery
-                Ok(self.finish(start, Expr::Err))
+                self.finish(start, Expr::Err)
             }
         }
     }
 
-    pub fn parse_expr_with_min_bp(&mut self, min_bp: u32) -> Result<Spanned<Expr>> {
+    pub fn parse_expr_with_min_bp(&mut self, min_bp: u32) -> Spanned<Expr> {
         let start = self.start();
-        let mut lhs = self.parse_primary_expr()?;
+        let mut lhs = self.parse_primary_expr();
 
         loop {
             // Postfix operator.
@@ -748,7 +742,7 @@ impl Parser {
                 match postfix {
                     PostfixOp::Index => {
                         self.expect(Token::LBracket);
-                        let index = self.parse_expr()?;
+                        let index = self.parse_expr();
                         self.expect(Token::RBracket);
                         lhs = self.finish(
                             start,
@@ -783,7 +777,7 @@ impl Parser {
             let bin_op = self.finish(bin_op_start, bin_op);
 
             // Parse RHS.
-            let rhs = self.parse_expr_with_min_bp(r_bp)?;
+            let rhs = self.parse_expr_with_min_bp(r_bp);
             lhs = self.finish(
                 start,
                 Expr::Binary(self.finish(
@@ -797,27 +791,27 @@ impl Parser {
             );
         }
 
-        Ok(lhs)
+        lhs
     }
 
-    pub fn parse_block_expr(&mut self) -> Result<Spanned<BlockExpr>> {
+    pub fn parse_block_expr(&mut self) -> Spanned<BlockExpr> {
         let start = self.start();
         self.expect(Token::LBrace);
 
         let mut exprs = Vec::new();
         while self.peek_next() != &Token::RBrace {
-            exprs.push(self.parse_expr()?);
+            exprs.push(self.parse_expr());
         }
         self.expect(Token::RBrace);
-        Ok(self.finish(start, BlockExpr { exprs }))
+        self.finish(start, BlockExpr { exprs })
     }
 
-    pub fn parse_tuple_expr(&mut self) -> Result<Spanned<Expr>> {
+    pub fn parse_tuple_expr(&mut self) -> Spanned<Expr> {
         let start = self.start();
         self.expect(Token::LParen);
         let mut elements = Vec::new();
         while self.peek_is_expr() {
-            elements.push(self.parse_expr()?);
+            elements.push(self.parse_expr());
             if self.peek_next() != &Token::Comma {
                 break;
             } else {
@@ -826,20 +820,20 @@ impl Parser {
         }
         self.expect(Token::RParen);
         match elements.len() {
-            1 => Ok(elements.into_iter().next().unwrap()),
-            _ => Ok(self.finish(
+            1 => elements.into_iter().next().unwrap(),
+            _ => self.finish(
                 start,
                 Expr::Tuple(self.finish(start, TupleExpr { elements })),
-            )),
+            ),
         }
     }
 
-    pub fn parse_record_expr(&mut self) -> Result<Spanned<RecordExpr>> {
+    pub fn parse_record_expr(&mut self) -> Spanned<RecordExpr> {
         let start = self.start();
         self.expect(Token::LBrace);
         let mut fields = Vec::new();
         while let Token::Ident(_) = self.peek_next() {
-            fields.push(self.parse_record_field_expr()?);
+            fields.push(self.parse_record_field_expr());
             if self.peek_next() != &Token::Comma {
                 break;
             } else {
@@ -847,107 +841,107 @@ impl Parser {
             }
         }
         self.expect(Token::RBrace);
-        Ok(self.finish(start, RecordExpr { fields }))
+        self.finish(start, RecordExpr { fields })
     }
 
-    pub fn parse_record_field_expr(&mut self) -> Result<Spanned<RecordFieldExpr>> {
+    pub fn parse_record_field_expr(&mut self) -> Spanned<RecordFieldExpr> {
         let start = self.start();
         let ident = self.parse_ident();
         self.expect(Token::Eq);
-        let expr = self.parse_expr()?;
-        Ok(self.finish(start, RecordFieldExpr { ident, expr }))
+        let expr = self.parse_expr();
+        self.finish(start, RecordFieldExpr { ident, expr })
     }
 
-    pub fn parse_if_expr(&mut self) -> Result<Spanned<IfExpr>> {
+    pub fn parse_if_expr(&mut self) -> Spanned<IfExpr> {
         let start = self.start();
         self.expect(Token::KwIf);
-        let cond = self.parse_expr()?;
+        let cond = self.parse_expr();
         self.expect(Token::KwThen);
-        let then = self.parse_expr()?;
+        let then = self.parse_expr();
         self.expect(Token::KwElse);
-        let else_ = self.parse_expr()?;
-        Ok(self.finish(
+        let else_ = self.parse_expr();
+        self.finish(
             start,
             IfExpr {
                 cond: Box::new(cond),
                 then: Box::new(then),
                 else_: Box::new(else_),
             },
-        ))
+        )
     }
 
-    pub fn parse_while_expr(&mut self) -> Result<Spanned<WhileExpr>> {
+    pub fn parse_while_expr(&mut self) -> Spanned<WhileExpr> {
         let start = self.start();
         self.expect(Token::KwWhile);
-        let cond = self.parse_expr()?;
-        let body = self.parse_block_expr()?;
+        let cond = self.parse_expr();
+        let body = self.parse_block_expr();
         let body = Box::new(spanned(body.span(), Expr::Block(body)));
-        Ok(self.finish(
+        self.finish(
             start,
             WhileExpr {
                 cond: Box::new(cond),
                 body,
             },
-        ))
+        )
     }
 
-    pub fn parse_for_expr(&mut self) -> Result<Spanned<ForExpr>> {
+    pub fn parse_for_expr(&mut self) -> Spanned<ForExpr> {
         let start = self.start();
         self.expect(Token::KwFor);
-        let binding = self.parse_binding()?;
+        let binding = self.parse_binding();
         self.expect(Token::KwIn);
-        let iter = self.parse_expr()?;
-        let body = self.parse_block_expr()?;
+        let iter = self.parse_expr();
+        let body = self.parse_block_expr();
         let body = Box::new(spanned(body.span(), Expr::Block(body)));
-        Ok(self.finish(
+        self.finish(
             start,
             ForExpr {
                 binding,
                 iter: Box::new(iter),
                 body,
             },
-        ))
+        )
     }
 
-    pub fn parse_loop_expr(&mut self) -> Result<Spanned<LoopExpr>> {
+    pub fn parse_loop_expr(&mut self) -> Spanned<LoopExpr> {
         let start = self.start();
         self.expect(Token::KwLoop);
-        let body = self.parse_block_expr()?;
+        let body = self.parse_block_expr();
         let body = Box::new(spanned(body.span(), Expr::Block(body)));
-        Ok(self.finish(start, LoopExpr { body }))
+        self.finish(start, LoopExpr { body })
     }
 
-    pub fn parse_return_expr(&mut self) -> Result<Spanned<ReturnExpr>> {
+    pub fn parse_return_expr(&mut self) -> Spanned<ReturnExpr> {
         let start = self.start();
         self.expect(Token::KwReturn);
-        let expr = self.parse_expr()?;
-        Ok(self.finish(
+        let expr = self.parse_expr();
+        self.finish(
             start,
             ReturnExpr {
                 expr: Box::new(expr),
             },
-        ))
+        )
     }
 
-    pub fn parse_let_expr(&mut self) -> Result<Spanned<LetExpr>> {
+    pub fn parse_let_expr(&mut self) -> Spanned<LetExpr> {
         let start = self.start();
         self.expect(Token::KwLet);
         let ident = self.parse_ident();
 
         let ret_ty = if self.peek_next() == &Token::Colon {
             self.expect(Token::Colon);
-            Some(self.parse_type()?)
+            Some(self.parse_type())
         } else {
             None
         };
 
         self.expect(Token::Eq);
-        let expr = self.parse_expr()?;
+        let expr = self.parse_expr();
 
         self.expect(Token::KwIn);
-        let _in = self.parse_expr()?;
+        let _in = self.parse_expr();
 
-        Ok(self.finish(
+        self.finish(
             start,
             LetExpr {
                 ident,
@@ -955,23 +949,23 @@ impl Parser {
                 expr: Box::new(expr),
                 _in: Box::new(_in),
             },
-        ))
+        )
     }
 
-    pub fn parse_mod_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<ModItem>> {
+    pub fn parse_mod_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<ModItem> {
         let start = self.start();
-        let vis = self.parse_vis()?;
+        let vis = self.parse_vis();
         self.expect(Token::KwMod);
         let ident = self.parse_ident();
-        Ok(self.finish(start, ModItem { attrs, vis, ident }))
+        self.finish(start, ModItem { attrs, vis, ident })
     }
 
-    pub fn parse_use_item(&mut self, attrs: Spanned<Attributes>) -> Result<Spanned<UseItem>> {
+    pub fn parse_use_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<UseItem> {
         let start = self.start();
-        let vis = self.parse_vis()?;
+        let vis = self.parse_vis();
         self.expect(Token::KwUse);
         let path = self.parse_ident();
-        Ok(self.finish(start, UseItem { attrs, vis, path }))
+        self.finish(start, UseItem { attrs, vis, path })
     }
 
     /// Try to parse an identifier. Will consume a token even in the case of mismatch.
@@ -990,7 +984,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_binding(&mut self) -> Result<Spanned<Binding>> {
+    pub fn parse_binding(&mut self) -> Spanned<Binding> {
         let start = self.start();
         let ident = self.parse_ident();
         let ty = if self.peek_next() == &Token::Colon {
@@ -999,6 +993,6 @@ impl Parser {
         } else {
             None
         };
-        Ok(self.finish(start, Binding { ident, ty }))
+        self.finish(start, Binding { ident, ty })
     }
 }
