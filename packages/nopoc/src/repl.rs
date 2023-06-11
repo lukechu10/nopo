@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::io::{BufRead, Write};
 
-use crate::passes::resolution::run_resolution_passes;
+use crate::passes::run_resolution_passes;
 use nopo_diagnostics::span::FileIdMap;
 use nopo_diagnostics::Diagnostics;
 

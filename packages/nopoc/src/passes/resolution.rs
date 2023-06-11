@@ -92,8 +92,11 @@ impl Visitor for CollectIdents {
 #[derive(Debug)]
 pub struct ResolveTypeContents {
     idents: CollectIdents,
-    pub types: ArenaMap<TypeId, TypeData>,
+    /// Map from type items to their type data.
+    pub type_item_map: ArenaMap<TypeId, TypeData>,
+    /// Temporary state of current type item being visited.
     current_type_id: Option<TypeId>,
+    /// Temporary state of current let item being visited.
     current_let_id: Option<LetId>,
     /// Current list of type args in scope.
     current_type_params: Vec<Ident>,
@@ -103,7 +106,7 @@ impl ResolveTypeContents {
     pub fn new(idents: CollectIdents, diagnostics: Diagnostics) -> Self {
         Self {
             idents,
-            types: ArenaMap::new(),
+            type_item_map: ArenaMap::new(),
             current_type_id: None,
             current_let_id: None,
             current_type_params: Vec::new(),
@@ -176,16 +179,26 @@ impl ResolveTypeContents {
         else if let Some(id) = self.idents.type_items.get(&*ty.path[0]) {
             ResolvedType::Ident(*id)
         } else {
-            self.diagnostics.add(UnresolvedType {
-                span: ty.span(),
-                ty: spanned(ty.span(), Type::Path(ty.clone())),
-            });
-            ResolvedType::Err
+            // TODO: do not hardcode built-in types in type resolution.
+            match ty.path[0].to_string().as_str() {
+                "bool" => ResolvedType::Bool,
+                "int" => ResolvedType::Int,
+                "float" => ResolvedType::Float,
+                "string" => ResolvedType::String,
+                "char" => ResolvedType::Char,
+                _ => {
+                    self.diagnostics.add(UnresolvedType {
+                        span: ty.span(),
+                        ty: spanned(ty.span(), Type::Path(ty.clone())),
+                    });
+                    ResolvedType::Err
+                }
+            }
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedType {
     Ident(TypeId),
     Tuple(Vec<ResolvedType>),
@@ -206,11 +219,42 @@ pub enum ResolvedType {
         /// The position where this type parameter appears in the signature of the let item.
         param_pos: usize,
     },
+    // Built-in types.
+    Bool,
+    Int,
+    Float,
+    String,
+    Char,
     /// Used for expressions that have not had their type inferred yet.
     Tmp(u32),
     /// Type could not be resolved.
     Err,
 }
+
+impl ResolvedType {
+    /// Create a new resolved type representing a curried function.
+    ///
+    /// For example, a function with params `a`, `b`, `c` and return value `ret` would become the
+    /// type `a -> b -> c -> ret`.
+    pub fn new_curried_function(args: &[Self], ret: Self) -> Self {
+        match args.split_first() {
+            Some((first, rest @ [_, ..])) => Self::Fn {
+                arg: Box::new(first.clone()),
+                ret: Box::new(Self::new_curried_function(rest, ret)),
+            },
+            Some((first, _rest @ [])) => Self::Fn {
+                arg: Box::new(first.clone()),
+                ret: Box::new(ret),
+            },
+            None => ret,
+        }
+    }
+
+    pub fn of_type_item(id: TypeId) -> Self {
+        Self::Ident(id)
+    }
+}
+
 /// Data about a type.
 #[derive(Debug)]
 pub struct TypeData {
@@ -274,7 +318,7 @@ impl Visitor for ResolveTypeContents {
             }),
             TypeDef::Err => unreachable!(),
         };
-        self.types.insert(
+        self.type_item_map.insert(
             idx,
             TypeData {
                 ident: item.ident.clone(),
@@ -290,30 +334,30 @@ impl Visitor for ResolveTypeContents {
 /// Phase 3: Resolve let bodies.
 #[derive(Debug)]
 pub struct ResolveLetContents {
-    type_contents: ResolveTypeContents,
-    bindings: Arena<BindingData>,
+    pub type_contents: ResolveTypeContents,
+    pub bindings: Arena<BindingData>,
     global_bindings: Vec<BindingId>,
     local_bindings_stack: Vec<BindingId>,
     /// Mapping from AST nodes to bindings.
-    bindings_map: BindingsMap,
+    pub bindings_map: BindingsMap,
     /// Mapping from type items too the types that they represent.
-    type_map: NodeMap<Type, ResolvedType>,
+    pub type_map: NodeMap<Type, ResolvedType>,
     diagnostics: Diagnostics,
 }
 
 #[derive(Debug, Default)]
 pub struct BindingsMap {
     /// Mapping from identifiers to their bindings.
-    idents: NodeMap<IdentExpr, ResolvedBinding>,
+    pub idents: NodeMap<IdentExpr, ResolvedBinding>,
     /// Mapping from data-constructors to their bindings. Data-constructors are treated just like
     /// functions.
-    data_constructors: NodeMap<DataConstructor, BindingId>,
+    pub data_constructors: NodeMap<DataConstructor, BindingId>,
     /// Mapping from let params to their bindings.
-    params: NodeMap<Param, BindingId>,
+    pub params: NodeMap<Param, BindingId>,
     /// Mapping from let items to their bindings.
-    let_items: NodeMap<LetItem, BindingId>,
+    pub let_items: NodeMap<LetItem, BindingId>,
     /// Mapping from let expressions to their bindings.
-    let_exprs: NodeMap<LetExpr, BindingId>,
+    pub let_exprs: NodeMap<LetExpr, BindingId>,
 }
 
 pub type BindingId = Idx<BindingData>;
@@ -477,13 +521,4 @@ impl Visitor for ResolveLetContents {
             _ => walk_expr(self, expr),
         }
     }
-}
-
-pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) {
-    let mut collect_idents = CollectIdents::default();
-    collect_idents.visit_root(root);
-    let mut resolve_type_contents = ResolveTypeContents::new(collect_idents, diagnostics.clone());
-    resolve_type_contents.visit_root(root);
-    let mut resolve_let_contents = ResolveLetContents::new(resolve_type_contents, diagnostics);
-    resolve_let_contents.visit_root(root);
 }

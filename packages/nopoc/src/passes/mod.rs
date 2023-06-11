@@ -9,10 +9,12 @@ use std::path::{Path, PathBuf};
 use nopo_diagnostics::Diagnostics;
 use thiserror::Error;
 
+use crate::ast::visitor::Visitor;
 use crate::ast::{Ident, Root};
 use nopo_diagnostics::span::{FileId, FileIdMap};
 
-use self::resolution::run_resolution_passes;
+use self::resolution::{CollectIdents, ResolveLetContents, ResolveTypeContents};
+use self::unify::UnifyTypes;
 
 #[derive(Error, Debug)]
 pub enum CompileError {
@@ -216,4 +218,17 @@ impl ParseResult {
         run_resolution_passes(self.get_entry_root(), diagnostics);
         CheckResult {}
     }
+}
+
+pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) {
+    let mut collect_idents = CollectIdents::default();
+    collect_idents.visit_root(root);
+    let mut resolve_type_contents = ResolveTypeContents::new(collect_idents, diagnostics.clone());
+    resolve_type_contents.visit_root(root);
+    let mut resolve_let_contents =
+        ResolveLetContents::new(resolve_type_contents, diagnostics.clone());
+    resolve_let_contents.visit_root(root);
+
+    let mut unify_types = UnifyTypes::new(resolve_let_contents, diagnostics);
+    unify_types.visit_root(root);
 }

@@ -27,7 +27,7 @@ fn entry() -> Result<(), Box<dyn Error>> {
 
     if let Some(input) = args.input {
         passes::compile(&input)?;
-        println!("Compiled successfully!");
+        println!("Done!");
         Ok(())
     } else {
         repl::start_repl()
