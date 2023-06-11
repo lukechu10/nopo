@@ -119,7 +119,7 @@ pub enum Type {
     Err,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PathType {
     pub path: Vec<Spanned<Ident>>,
 }
@@ -283,11 +283,40 @@ pub enum Ident {
     Err,
 }
 
+// Pretty printing implementations.
+
 impl fmt::Display for Ident {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Ident::Ok(str) => write!(f, "{str}"),
             Ident::Err => write!(f, "ERR"),
         }
+    }
+}
+
+// TODO: precedence aware pretty-printing
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::Path(Spanned(PathType { path }, _)) => {
+                for ident in path {
+                    write!(f, "{ident}")?;
+                }
+            }
+            Type::Fn(Spanned(FnType { arg_ty, ret_ty }, _)) => write!(f, "({arg_ty} -> {ret_ty})")?,
+            Type::Tuple(Spanned(TupleType { fields }, _)) => {
+                write!(f, "(")?;
+                for field in fields {
+                    write!(f, "{field}")?;
+                }
+                write!(f, ")")?;
+            }
+            Type::Constructed(Spanned(ConstructedType { constructor, arg }, _)) => {
+                write!(f, "({constructor} {arg})")?
+            }
+            Type::Param(Spanned(TypeParam { ident }, _)) => write!(f, "'{ident}")?,
+            Type::Err => write!(f, "ERR")?,
+        }
+        Ok(())
     }
 }

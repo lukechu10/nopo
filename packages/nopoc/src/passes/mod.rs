@@ -33,7 +33,10 @@ pub fn compile(entry: &Path) -> Result<(), CompileError> {
     if !diagnostics.eprint(&parse_result.file_id_map) {
         return Ok(());
     }
-    parse_result.check();
+    parse_result.check(diagnostics.clone());
+    if !diagnostics.eprint(&parse_result.file_id_map) {
+        return Ok(());
+    }
     Ok(())
 }
 
@@ -208,8 +211,8 @@ pub fn parse_files_recursive(
 }
 
 impl ParseResult {
-    pub fn check(&self) -> CheckResult {
-        run_resolution_passes(self.get_entry_root());
+    pub fn check(&self, diagnostics: Diagnostics) -> CheckResult {
+        run_resolution_passes(self.get_entry_root(), diagnostics);
         CheckResult {}
     }
 }

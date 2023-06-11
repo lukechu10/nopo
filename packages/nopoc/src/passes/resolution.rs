@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 
 use la_arena::{Arena, ArenaMap, Idx};
+use nopo_diagnostics::{Diagnostics, IntoReport};
 
 use crate::ast::visitor::{walk_expr, walk_let_item, Visitor};
 use crate::ast::{
@@ -23,9 +24,36 @@ use crate::ast::{
     Root, TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
 };
 use crate::parser::lexer::BinOp;
-use nopo_diagnostics::span::{Span, Spanned};
+use nopo_diagnostics::span::{spanned, Span, Spanned};
 
 use super::map::NodeMap;
+
+#[derive(IntoReport)]
+#[kind("error")]
+#[message("unresolved type parameter `'{param}`")]
+struct UnresolvedTypeParam {
+    span: Span,
+    #[label(message = "`'{param}` not found in current scope")]
+    param: Spanned<Ident>,
+}
+
+#[derive(IntoReport)]
+#[kind("error")]
+#[message("unresolved type `{ty}`")]
+struct UnresolvedType {
+    span: Span,
+    #[label(message = "Type `{ty}` not found in current scope")]
+    ty: Spanned<Type>,
+}
+
+#[derive(IntoReport)]
+#[kind("error")]
+#[message("unresolved binding `{ident}`")]
+struct UnresolvedBinding {
+    span: Span,
+    #[label(message = "Binding `{ident}` not found in current scope")]
+    ident: Spanned<Ident>,
+}
 
 /// Phase 1: Collect names of all items in module. Also checks for duplicate top-level symbols.
 #[derive(Debug, Default)]
@@ -69,15 +97,17 @@ pub struct ResolveTypeContents {
     current_let_id: Option<LetId>,
     /// Current list of type args in scope.
     current_type_params: Vec<Ident>,
+    diagnostics: Diagnostics,
 }
 impl ResolveTypeContents {
-    pub fn new(idents: CollectIdents) -> Self {
+    pub fn new(idents: CollectIdents, diagnostics: Diagnostics) -> Self {
         Self {
             idents,
             types: ArenaMap::new(),
             current_type_id: None,
             current_let_id: None,
             current_type_params: Vec::new(),
+            diagnostics,
         }
     }
 
@@ -103,7 +133,7 @@ impl ResolveTypeContents {
                     arg: Box::new(self.resolve_type(arg, create_ty_params)),
                 }
             }
-            Type::Param(Spanned(TypeParam { ident }, _)) => {
+            Type::Param(Spanned(TypeParam { ident }, span)) => {
                 if let Some(param_pos) = self.current_type_params.iter().position(|x| &**ident == x)
                 {
                     if let Some(constructor) = self.current_type_id {
@@ -127,7 +157,10 @@ impl ResolveTypeContents {
                         param_pos,
                     }
                 } else {
-                    eprintln!("unresolved type parameter {ident:?}, TODO: implement diagnostics");
+                    self.diagnostics.add(UnresolvedTypeParam {
+                        span: *span,
+                        param: ident.clone(),
+                    });
                     ResolvedType::Err
                 }
             }
@@ -135,7 +168,7 @@ impl ResolveTypeContents {
         }
     }
 
-    fn resolve_path_type(&self, ty: &PathType) -> ResolvedType {
+    fn resolve_path_type(&self, ty: &Spanned<PathType>) -> ResolvedType {
         if ty.path.len() != 1 {
             todo!("modules");
         }
@@ -143,7 +176,10 @@ impl ResolveTypeContents {
         else if let Some(id) = self.idents.type_items.get(&*ty.path[0]) {
             ResolvedType::Ident(*id)
         } else {
-            eprintln!("unresolved type {ty:?}, TODO: implement diagnostics");
+            self.diagnostics.add(UnresolvedType {
+                span: ty.span(),
+                ty: spanned(ty.span(), Type::Path(ty.clone())),
+            });
             ResolvedType::Err
         }
     }
@@ -264,6 +300,7 @@ pub struct ResolveLetContents {
     /// created by this expression.
     expr_bindings_map: NodeMap<Expr, ResolvedBinding>,
     type_map: NodeMap<Type, ResolvedType>,
+    diagnostics: Diagnostics,
 }
 
 type BindingId = Idx<BindingData>;
@@ -279,7 +316,7 @@ pub enum ResolvedBinding {
 }
 
 impl ResolveLetContents {
-    pub fn new(type_contents: ResolveTypeContents) -> Self {
+    pub fn new(type_contents: ResolveTypeContents, diagnostics: Diagnostics) -> Self {
         let mut bindings = Arena::new();
         let mut global_bindings_map = HashMap::new();
         let mut global_bindings = Vec::new();
@@ -315,15 +352,16 @@ impl ResolveLetContents {
             local_bindings_stack: Vec::new(),
             expr_bindings_map: NodeMap::default(),
             type_map: NodeMap::default(),
+            diagnostics,
         }
     }
 
     /// Try to resolve a variable binding. If no binding is found, an error is produce and a
     /// [`ResolvedBinding::Err`] is returned.
-    fn resolve_binding(&self, ident: &Ident) -> ResolvedBinding {
+    fn resolve_binding(&self, ident: &Spanned<Ident>) -> ResolvedBinding {
         // Check local bindings stack first, going in reverse direction.
         for &local_binding in self.local_bindings_stack.iter().rev() {
-            if &self.bindings[local_binding].ident == ident {
+            if &self.bindings[local_binding].ident == &**ident {
                 return ResolvedBinding::Ok(local_binding);
             }
         }
@@ -331,11 +369,14 @@ impl ResolveLetContents {
         if let Some(binding) = self
             .global_bindings
             .iter()
-            .find(|idx| &self.bindings[**idx].ident == ident)
+            .find(|idx| &self.bindings[**idx].ident == &**ident)
         {
             ResolvedBinding::Ok(*binding)
         } else {
-            eprintln!("binding `{ident}` not found, TODO: implement diagnostics");
+            self.diagnostics.add(UnresolvedBinding {
+                span: ident.span(),
+                ident: ident.clone(),
+            });
             ResolvedBinding::Err
         }
     }
@@ -416,11 +457,11 @@ impl Visitor for ResolveLetContents {
     }
 }
 
-pub fn run_resolution_passes(root: &Root) {
+pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) {
     let mut collect_idents = CollectIdents::default();
     collect_idents.visit_root(root);
-    let mut resolve_type_contents = ResolveTypeContents::new(collect_idents);
+    let mut resolve_type_contents = ResolveTypeContents::new(collect_idents, diagnostics.clone());
     resolve_type_contents.visit_root(root);
-    let mut resolve_let_contents = ResolveLetContents::new(resolve_type_contents);
+    let mut resolve_let_contents = ResolveLetContents::new(resolve_type_contents, diagnostics);
     resolve_let_contents.visit_root(root);
 }
