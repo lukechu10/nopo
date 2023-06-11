@@ -348,6 +348,11 @@ impl UnifyTypes {
     /// Solve the constraints by using substitutions.
     fn solve(&mut self) -> HashMap<u32, ResolvedType> {
         let mut constraints = self.state.constraints.clone();
+
+        for constraint in &constraints {
+            eprintln!("CONSTRAINT: {} <-> {}", constraint.0.pretty(&self.type_item_map), constraint.1.pretty(&self.type_item_map));
+        }
+
         let diagnostics: &mut Diagnostics = &mut self.diagnostics;
         let mut solutions = HashMap::<u32, ResolvedType>::new();
         loop {
@@ -454,18 +459,13 @@ impl Constraint {
         use ResolvedType::*;
 
         match (lhs, rhs) {
-            (Tmp(a), rhs) => {
-                if rhs.includes_type_var(a) {
+            (Tmp(a), ty) | (ty, Tmp(a)) => {
+                if ty == Tmp(a) {
+                    SubSearch::None
+                } else if ty.includes_type_var(a) {
                     SubSearch::InfiniteType
                 } else {
-                    SubSearch::Sub(a, rhs.clone())
-                }
-            }
-            (lhs, Tmp(a)) => {
-                if lhs.includes_type_var(a) {
-                    SubSearch::InfiniteType
-                } else {
-                    SubSearch::Sub(a, lhs.clone())
+                    SubSearch::Sub(a, ty.clone())
                 }
             }
             (Tuple(lhs), Tuple(rhs)) => {

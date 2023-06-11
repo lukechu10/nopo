@@ -268,8 +268,11 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
             ResolvedType::Ident(id) => write!(f, "{}", self.1[*id].ident)?,
             ResolvedType::Tuple(types) => {
                 write!(f, "(")?;
-                for ty in types {
-                    write!(f, "{}", ty.pretty(self.1))?;
+                if let Some(first) = types.first() {
+                    write!(f, "{}", first.pretty(self.1))?;
+                }
+                for ty in types.iter().skip(1) {
+                    write!(f, ", {}", ty.pretty(self.1))?;
                 }
                 write!(f, ")")?;
             }

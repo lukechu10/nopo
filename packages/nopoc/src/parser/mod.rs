@@ -467,7 +467,7 @@ impl Parser {
             self.expect(Token::KwOf);
             let mut of = Vec::new();
             while self.peek_is_type() {
-                of.push(self.parse_type());
+                of.push(self.parse_primary_type());
             }
             of
         } else {
@@ -493,20 +493,29 @@ impl Parser {
         match self.peek_next() {
             Token::LParen => {
                 self.expect(Token::LParen);
-                let ty = self.parse_type();
-                if self.peek_next() == &Token::Comma {
-                    // Parse a tuple.
-                    self.expect(Token::Comma);
-                    let mut fields = vec![ty];
-                    while self.peek_is_type() {
-                        fields.push(self.parse_type());
-                    }
+                if self.peek_next() == &Token::RParen {
+                    // Empty tuple
                     self.expect(Token::RParen);
-                    self.finish(start, Type::Tuple(self.finish(start, TupleType { fields })))
+                    self.finish(
+                        start,
+                        Type::Tuple(self.finish(start, TupleType { fields: Vec::new() })),
+                    )
                 } else {
-                    // This is just a parenthesized type.
-                    self.expect(Token::RParen);
-                    ty
+                    let ty = self.parse_type();
+                    if self.peek_next() == &Token::Comma {
+                        // Parse a tuple.
+                        self.expect(Token::Comma);
+                        let mut fields = vec![ty];
+                        while self.peek_is_type() {
+                            fields.push(self.parse_type());
+                        }
+                        self.expect(Token::RParen);
+                        self.finish(start, Type::Tuple(self.finish(start, TupleType { fields })))
+                    } else {
+                        // This is just a parenthesized type.
+                        self.expect(Token::RParen);
+                        ty
+                    }
                 }
             }
             Token::Ident(_) => {
