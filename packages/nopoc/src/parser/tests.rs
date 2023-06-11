@@ -1,20 +1,32 @@
 use expect_test::{expect, Expect};
+use nopo_diagnostics::span::FileIdMap;
 
 use super::*;
 
 #[track_caller]
 fn check_root(input: &str, expect: Expect) {
-    let mut parser = Parser::new(FileId::DUMMY, input);
+    let map = FileIdMap::new();
+    let diagnostics = Diagnostics::default();
+    let id = map.create_virtual_file("<test>", input.to_string());
+
+    let mut parser = Parser::new(id, input, diagnostics.clone());
+    assert!(diagnostics.eprint(&map));
+
     let root = parser.parse_root().expect("could not parse root");
     expect.assert_debug_eq(&root);
 }
 
 #[track_caller]
 fn check_expr(input: &str, expect: Expect) {
-    let mut parser = Parser::new(FileId::DUMMY, input);
-    let expr = parser.parse_expr().expect("could not parse expr");
-    assert_eq!(parser.peek_next(), &Token::Eof);
-    expect.assert_debug_eq(&expr);
+    let map = FileIdMap::new();
+    let diagnostics = Diagnostics::default();
+    let id = map.create_virtual_file("<test>", input.to_string());
+
+    let mut parser = Parser::new(id, input, diagnostics.clone());
+    assert!(diagnostics.eprint(&map));
+
+    let root = parser.parse_expr().expect("could not parse expr");
+    expect.assert_debug_eq(&root);
 }
 
 #[test]

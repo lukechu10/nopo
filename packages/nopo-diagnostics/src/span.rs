@@ -1,10 +1,16 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug)]
+pub enum FileDesc {
+    Path(PathBuf),
+    Virtual { name: String, source: String },
+}
+
+#[derive(Debug, Default)]
 pub struct FileIdMap {
-    map: HashMap<FileId, PathBuf>,
+    map: HashMap<FileId, FileDesc>,
     /// The id for the next file.
     counter: u16,
 }
@@ -14,15 +20,56 @@ impl FileIdMap {
         Self::default()
     }
 
-    pub fn insert_new_file(&mut self, path: PathBuf) -> FileId {
-        let file_id = FileId(self.counter);
+    fn new_id(&mut self) -> FileId {
+        let id = FileId(self.counter);
         self.counter += 1;
-        self.map.insert(file_id, path);
-        file_id
+        id
     }
 
-    pub fn get_file_id(&self, file_id: FileId) -> &Path {
-        &self.map[&file_id]
+    pub fn insert_new_file(&mut self, path: PathBuf) -> FileId {
+        let id = self.new_id();
+        self.map.insert(id, FileDesc::Path(path));
+        id
+    }
+
+    /// Create a new virtual file. If a virtual file already exists, replaces it.
+    pub fn create_virtual_file(&mut self, name: &str, source: String) -> FileId {
+        let id = self.new_id();
+        self.map.insert(
+            id,
+            FileDesc::Virtual {
+                name: name.to_string(),
+                source,
+            },
+        );
+        id
+    }
+
+    pub fn is_virtual(&self, id: FileId) -> bool {
+        matches!(self.map[&id], FileDesc::Virtual { .. })
+    }
+
+    /// Get the path of the file. If the file is a virtual file, then this panics.
+    #[track_caller]
+    pub fn get_file_path(&self, id: FileId) -> &Path {
+        match &self.map[&id] {
+            FileDesc::Path(path) => path,
+            _ => panic!("{id:?} references a virtual file"),
+        }
+    }
+
+    pub fn get_file_display(&self, id: FileId) -> String {
+        match &self.map[&id] {
+            FileDesc::Path(path) => path.display().to_string(),
+            FileDesc::Virtual { name, .. } => name.clone(),
+        }
+    }
+
+    pub fn get_virtual_source(&self, id: FileId) -> &str {
+        match &self.map[&id] {
+            FileDesc::Path(_) => panic!("{id:?} references a real file"),
+            FileDesc::Virtual { source, .. } => source
+        }
     }
 }
 
@@ -104,5 +151,22 @@ impl<T> Spanned<T> {
 
     pub fn span(&self) -> Span {
         self.1
+    }
+}
+
+/// Used for diagnostics.
+pub trait GetSpan {
+    fn span(&self) -> Span;
+}
+
+impl<T> GetSpan for Spanned<T> {
+    fn span(&self) -> Span {
+        self.1
+    }
+}
+
+impl GetSpan for Span {
+    fn span(&self) -> Span {
+        *self
     }
 }

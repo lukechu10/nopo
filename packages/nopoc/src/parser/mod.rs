@@ -2,12 +2,12 @@ use std::ops::Range;
 
 use la_arena::Arena;
 use logos::Logos;
+use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
+use nopo_diagnostics::{Diagnostics, IntoReport};
 use thiserror::Error;
 
-use crate::ast::*;
-use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
-
 use self::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
+use crate::ast::*;
 
 pub mod lexer;
 #[cfg(test)]
@@ -24,6 +24,7 @@ pub struct Parser {
     cursor: usize,
     /// The current file that is being parsed.
     file_id: FileId,
+    diagnostics: Diagnostics,
 }
 
 #[derive(Error, Debug)]
@@ -51,6 +52,16 @@ pub enum ParseError {
     Custom { message: String },
 }
 
+#[derive(IntoReport)]
+#[kind("error")]
+#[message("expected one of {expected:?}, found {unexpected:?}")]
+pub struct ExpectedToken {
+    span: Span,
+    expected: Vec<Token>,
+    #[label(message = "unexpected token")]
+    unexpected: Spanned<Token>,
+}
+
 pub type Result<T, E = ParseError> = std::result::Result<T, E>;
 
 /// A temporary struct used to store the start of a span.
@@ -60,7 +71,7 @@ struct SpanStart {
 }
 
 impl Parser {
-    pub fn new(file_id: FileId, source: &str) -> Self {
+    pub fn new(file_id: FileId, source: &str, diagnostics: Diagnostics) -> Self {
         let tokens = Some((Token::Start, 0..0))
             .into_iter()
             .chain(Token::lexer(source).spanned())
@@ -69,6 +80,7 @@ impl Parser {
             tokens,
             cursor: 0,
             file_id,
+            diagnostics,
         }
     }
 
@@ -144,13 +156,18 @@ impl Parser {
     }
 
     /// Get the next token and expect it to be the same token as `expected`.
-    pub fn expect(&mut self, expected: Token) -> Result<&Token> {
-        let next = self.get_next();
-        if next == &expected {
-            Ok(next)
+    pub fn expect(&mut self, expected: Token) -> Result<()> {
+        let start = self.start();
+        if self.get_next() == &expected {
+            Ok(())
         } else {
+            self.diagnostics.add(ExpectedToken {
+                span: self.end(start),
+                expected: vec![expected.clone()],
+                unexpected: self.finish(start, self.get_current().clone()),
+            });
             Err(ParseError::ExpectedToken {
-                unexpected: next.clone(),
+                unexpected: self.get_current().clone(),
                 expected: vec![expected],
             })
         }

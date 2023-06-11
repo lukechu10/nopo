@@ -48,17 +48,21 @@ impl<'a> FileCache<'a> {
 impl<'a> ariadne::Cache<FileId> for FileCache<'a> {
     fn fetch(&mut self, id: &FileId) -> Result<&Source, Box<dyn fmt::Debug + '_>> {
         if !self.sources.contains_key(id) {
-            // Read file from FS.
-            let path = self.map.get_file_id(*id);
-            let str = std::fs::read_to_string(path)
-                .unwrap_or_else(|_| panic!("could not read file at path `{}`", path.display()));
+            let str = if self.map.is_virtual(*id) {
+                self.map.get_virtual_source(*id).to_string()
+            } else {
+                // Read file from FS.
+                let path = self.map.get_file_path(*id);
+                std::fs::read_to_string(path)
+                    .unwrap_or_else(|_| panic!("could not read file at path `{}`", path.display()))
+            };
             self.sources.insert(*id, Source::from(str));
         }
         Ok(&self.sources[id])
     }
 
     fn display<'b>(&self, id: &'b FileId) -> Option<Box<dyn fmt::Display + 'b>> {
-        Some(Box::new(self.map.get_file_id(*id).display().to_string()))
+        Some(Box::new(self.map.get_file_display(*id)))
     }
 }
 
@@ -86,11 +90,13 @@ impl Diagnostics {
         self.0.lock().unwrap().reports.push(report);
     }
 
-    pub fn eprint(&self, map: &FileIdMap) {
+    /// Prints all the reports to `stderr`. Returns `false` if not empty.
+    pub fn eprint(&self, map: &FileIdMap) -> bool {
         let mut cache = FileCache::new(map);
         for report in &self.0.lock().unwrap().reports {
             report.eprint(&mut cache).unwrap();
         }
+        self.is_empty()
     }
 
     pub fn is_empty(&self) -> bool {

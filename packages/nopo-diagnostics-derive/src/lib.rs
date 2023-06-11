@@ -88,6 +88,7 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
         })
         .map(Option::transpose)
         .collect::<Result<Vec<_>>>()?;
+
     let labels = fields
         .iter()
         .zip(labels.iter())
@@ -97,7 +98,7 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
             let message = &label.value;
             quote! {
                 .with_label(
-                    ::nopo_diagnostics::Label::new(#ident)
+                    ::nopo_diagnostics::Label::new(<_ as ::nopo_diagnostics::span::GetSpan>::span(&#ident))
                         .with_message(::std::format!(#message)),
                 )
             }
