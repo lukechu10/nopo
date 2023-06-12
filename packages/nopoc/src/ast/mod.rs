@@ -303,6 +303,15 @@ pub enum Ident {
     Err,
 }
 
+impl From<Ident> for SmolStr {
+    fn from(value: Ident) -> Self {
+        match value {
+            Ident::Ok(str) => str,
+            Ident::Err => "".into(),
+        }
+    }
+}
+
 // Pretty printing implementations.
 
 impl fmt::Display for Ident {

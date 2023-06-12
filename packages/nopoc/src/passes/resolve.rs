@@ -6,6 +6,7 @@ use std::fmt;
 use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, IntoReport, Report};
+use smol_str::SmolStr;
 
 use crate::ast::visitor::{walk_expr, walk_let_item, walk_type_item, Visitor};
 use crate::ast::{
@@ -117,12 +118,9 @@ impl ResolveSymbols {
                 let symbol = TypeSymbol::Param(ident.as_ref().clone());
                 if let Some(resolved) = self.try_resolve_type_symbol(&symbol) {
                     resolved
-                } else if let Some(item_id @ ItemId::Let(_)) = self.current_item_id {
+                } else if let Some(ItemId::Let(_)) = self.current_item_id {
                     // If we are inside a let, we can create type parameters implicitly.
-                    let resolved = ResolvedType::Param {
-                        item: item_id,
-                        ident: ident.as_ref().clone(),
-                    };
+                    let resolved = ResolvedType::Var(ident.as_ref().clone().into());
                     self.types_stack.push((symbol, resolved.clone()));
                     resolved
                 } else {
@@ -267,10 +265,7 @@ impl Visitor for ResolveSymbols {
         // Create type parameters.
         for ty_param in &item.ty_params {
             let symbol = TypeSymbol::Param(ty_param.ident.as_ref().clone());
-            let resolved = ResolvedType::Param {
-                item: ItemId::Type(idx),
-                ident: ty_param.ident.as_ref().clone(),
-            };
+            let resolved = ResolvedType::Var(ty_param.ident.as_ref().clone().into());
             self.types_stack.push((symbol, resolved));
         }
 
@@ -390,18 +385,14 @@ enum TypeSymbol {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedType {
     Ident(TypeId),
-    Tuple(Vec<ResolvedType>),
+    Tuple(Vec<Self>),
     Fn {
-        arg: Box<ResolvedType>,
-        ret: Box<ResolvedType>,
+        arg: Box<Self>,
+        ret: Box<Self>,
     },
     Constructed {
-        constructor: Box<ResolvedType>,
-        arg: Box<ResolvedType>,
-    },
-    Param {
-        item: ItemId,
-        ident: Ident,
+        constructor: Box<Self>,
+        arg: Box<Self>,
     },
     // Built-in types.
     Bool,
@@ -409,11 +400,22 @@ pub enum ResolvedType {
     Float,
     String,
     Char,
-    /// Used for expressions that have not had their type inferred yet.
-    Tmp(u32),
+    /// A type variable. This can either be free or bound.
+    ///
+    /// Since identifiers cannot start with numbers, automatically generated type vars are always
+    /// integers.
+    Var(TypeVar),
+    /// Universal types.
+    /// `'a . f('a)` where `f` is any type potentially containing `'a`.
+    ForAll {
+        var: TypeVar,
+        ty: Box<Self>,
+    },
     /// Type could not be resolved.
     Err,
 }
+
+pub type TypeVar = SmolStr;
 
 impl ResolvedType {
     /// Create a new resolved type representing a curried function.
@@ -459,10 +461,7 @@ impl ResolvedType {
         let ty_params = type_item_map[id]
             .ty_params
             .iter()
-            .map(|param| Self::Param {
-                item: ItemId::Type(id),
-                ident: param.ident.as_ref().clone(),
-            })
+            .map(|param| Self::Var(param.ident.as_ref().clone().into()))
             .collect::<Vec<_>>();
         Self::new_curried_constructed_ty(Self::Ident(id), &ty_params)
     }
@@ -495,13 +494,13 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
             ResolvedType::Constructed { constructor, arg } => {
                 write!(f, "({} {})", constructor.pretty(self.1), arg.pretty(self.1))?
             }
-            ResolvedType::Param { ident, .. } => write!(f, "'{ident}")?,
             ResolvedType::Bool => write!(f, "bool")?,
             ResolvedType::Int => write!(f, "int")?,
             ResolvedType::Float => write!(f, "float")?,
             ResolvedType::String => write!(f, "string")?,
             ResolvedType::Char => write!(f, "char")?,
-            ResolvedType::Tmp(i) => write!(f, "{{unknown:{i}}}")?,
+            ResolvedType::Var(var) => write!(f, "'{var}")?,
+            ResolvedType::ForAll { var, ty } => write!(f, "'{var} . {}", ty.pretty(self.1))?,
             ResolvedType::Err => write!(f, "ERR")?,
         }
 

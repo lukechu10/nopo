@@ -17,7 +17,7 @@ use crate::parser::lexer::{BinOp, UnaryOp};
 use super::map::NodeMap;
 use super::resolve::{
     Binding, BindingId, BindingsMap, ResolveSymbols, ResolvedBinding, ResolvedType,
-    ResolvedTypePretty, TypeKind, TypesMap,
+    ResolvedTypePretty, TypeKind, TypeVar, TypesMap,
 };
 
 #[derive(Report)]
@@ -77,7 +77,7 @@ impl InferState {
     pub fn new_type_var(&mut self) -> ResolvedType {
         let counter = self.type_var_counter;
         self.type_var_counter += 1;
-        ResolvedType::Tmp(counter)
+        ResolvedType::Var(counter.to_string().into())
     }
 }
 
@@ -108,7 +108,7 @@ impl Visitor for UnifyTypes {
         // Back substitute back into bindings.
         for (id, ty) in &mut self.state.binding_types_map {
             for (var, sub) in &solutions {
-                ty.apply_sub(*var, sub.clone());
+                ty.apply_sub(var, sub.clone());
             }
             eprintln!(
                 "{}\t\t: {}",
@@ -224,7 +224,9 @@ impl Visitor for UnifyTypes {
                     .collect::<Vec<_>>();
                 for (param, c_param) in lambda_expr.params.iter().zip(&c_params) {
                     let binding = self.bindings_map.lambda_params[param];
-                    self.state.binding_types_map.insert(binding, c_param.clone());
+                    self.state
+                        .binding_types_map
+                        .insert(binding, c_param.clone());
                 }
                 self.visit_expr(&lambda_expr.expr);
                 let c_expr = self.state.expr_types_map[&*lambda_expr.expr].clone();
@@ -372,10 +374,10 @@ impl Visitor for UnifyTypes {
 
 impl UnifyTypes {
     /// Solve the constraints by using substitutions.
-    fn solve(&mut self) -> HashMap<u32, ResolvedType> {
+    fn solve(&mut self) -> HashMap<TypeVar, ResolvedType> {
         let mut constraints = self.state.constraints.clone();
 
-        let mut solutions = HashMap::<u32, ResolvedType>::new();
+        let mut solutions = HashMap::<TypeVar, ResolvedType>::new();
         loop {
             let sub_search = constraints
                 .iter()
@@ -383,7 +385,7 @@ impl UnifyTypes {
                 .map(|constraint| {
                     (
                         constraint.clone(),
-                        Constraint::generate_subs(constraint.0.unspan(), constraint.1.unspan()),
+                        Constraint::generate_subs(&constraint.0.unspan(), &constraint.1.unspan()),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -391,7 +393,7 @@ impl UnifyTypes {
             let mut subs = sub_search
                 .iter()
                 .filter_map(|(_, sub)| match sub {
-                    SubSearch::Sub(i, c_ty) => Some((*i, c_ty.clone())),
+                    SubSearch::Sub(var, c_ty) => Some((var.clone(), c_ty.clone())),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -424,18 +426,18 @@ impl UnifyTypes {
 
             // Apply all substitutions.
             for sub_i in 0..subs.len() {
-                let (i, c_ty) = subs[sub_i].clone();
+                let (var, c_ty) = subs[sub_i].clone();
                 // Substitute in constraints.
-                apply_subs(&mut constraints, i, c_ty.clone());
+                apply_subs(&mut constraints, &var, c_ty.clone());
                 // Substitute in existing solutions.
                 for (_, solution) in &mut solutions {
-                    solution.apply_sub(i, c_ty.clone());
+                    solution.apply_sub(&var, c_ty.clone());
                 }
                 // Substitute in all other substitutions which have not already been substituted.
                 for sub_j in sub_i + 1..subs.len() {
-                    subs[sub_j].1.apply_sub(i, c_ty.clone());
+                    subs[sub_j].1.apply_sub(&var, c_ty.clone());
                 }
-                solutions.insert(i, c_ty);
+                solutions.insert(var.clone(), c_ty);
             }
 
             // If we did not make any substitutions, then we are done.
@@ -449,10 +451,10 @@ impl UnifyTypes {
 }
 
 /// Substitute the type variable with id `i` with `c_ty`.
-fn apply_subs(constraints: &mut [Constraint], i: u32, c_ty: ResolvedType) {
+fn apply_subs(constraints: &mut [Constraint], var: &TypeVar, c_ty: ResolvedType) {
     for c in constraints {
-        c.0.apply_sub(i, c_ty.clone());
-        c.1.apply_sub(i, c_ty.clone());
+        c.0.apply_sub(var, c_ty.clone());
+        c.1.apply_sub(var, c_ty.clone());
     }
 }
 
@@ -461,7 +463,7 @@ enum SubSearch {
     /// Error, cannot unify types.
     Contradiction,
     /// Apply this substitution.
-    Sub(u32, ResolvedType),
+    Sub(TypeVar, ResolvedType),
     /// Error, type is infinite.
     InfiniteType,
     /// Nothing to do.
@@ -481,17 +483,17 @@ impl SubSearch {
 
 impl Constraint {
     /// Generate a substitution from the constraint. There may be more than one substitution.
-    fn generate_subs(lhs: ResolvedType, rhs: ResolvedType) -> SubSearch {
+    fn generate_subs(lhs: &ResolvedType, rhs: &ResolvedType) -> SubSearch {
         use ResolvedType::*;
 
         match (lhs, rhs) {
-            (Tmp(a), ty) | (ty, Tmp(a)) => {
-                if ty == Tmp(a) {
+            (Var(a), ty) | (ty, Var(a)) => {
+                if matches!(ty, Var(b) if a == b) {
                     SubSearch::None
                 } else if ty.includes_type_var(a) {
                     SubSearch::InfiniteType
                 } else {
-                    SubSearch::Sub(a, ty.clone())
+                    SubSearch::Sub(a.clone(), ty.clone())
                 }
             }
             (Tuple(lhs), Tuple(rhs)) => {
@@ -517,11 +519,11 @@ impl Constraint {
                     ret: rhs_ret,
                 },
             ) => {
-                let sub1 = Self::generate_subs(*lhs_arg, *rhs_arg);
+                let sub1 = Self::generate_subs(lhs_arg, rhs_arg);
                 if sub1.propagate_up() {
                     return sub1;
                 }
-                let sub2 = Self::generate_subs(*lhs_ret, *rhs_ret);
+                let sub2 = Self::generate_subs(lhs_ret, rhs_ret);
                 if sub2.propagate_up() {
                     return sub2;
                 }
@@ -537,11 +539,11 @@ impl Constraint {
                     arg: rhs_arg,
                 },
             ) => {
-                let sub1 = Self::generate_subs(*lhs_constructor, *rhs_constructor);
+                let sub1 = Self::generate_subs(lhs_constructor, rhs_constructor);
                 if sub1.propagate_up() {
                     return sub1;
                 }
-                let sub2 = Self::generate_subs(*lhs_arg, *rhs_arg);
+                let sub2 = Self::generate_subs(lhs_arg, rhs_arg);
                 if sub2.propagate_up() {
                     return sub2;
                 }
@@ -555,35 +557,44 @@ impl Constraint {
 
 impl ResolvedType {
     /// Thread through the substitution.
-    fn apply_sub(&mut self, i: u32, c_ty: Self) {
+    fn apply_sub(&mut self, var: &TypeVar, c_ty: Self) {
         match self {
             ResolvedType::Tuple(types) => {
                 for ty in types {
-                    ty.apply_sub(i, c_ty.clone());
+                    ty.apply_sub(var, c_ty.clone());
                 }
             }
             ResolvedType::Fn { arg, ret } => {
-                arg.apply_sub(i, c_ty.clone());
-                ret.apply_sub(i, c_ty);
+                arg.apply_sub(var, c_ty.clone());
+                ret.apply_sub(var, c_ty);
             }
             ResolvedType::Constructed { constructor, arg } => {
-                constructor.apply_sub(i, c_ty.clone());
-                arg.apply_sub(i, c_ty);
+                constructor.apply_sub(var, c_ty.clone());
+                arg.apply_sub(var, c_ty);
             }
-            ResolvedType::Tmp(j) if i == *j => *self = c_ty,
+            ResolvedType::Var(x) if x == var => *self = c_ty,
             _ => {}
         }
     }
 
-    fn includes_type_var(&self, i: u32) -> bool {
+    fn includes_type_var(&self, var: &TypeVar) -> bool {
         match self {
-            ResolvedType::Tuple(types) => types.iter().any(|ty| ty.includes_type_var(i)),
-            ResolvedType::Fn { arg, ret } => arg.includes_type_var(i) || ret.includes_type_var(i),
-            ResolvedType::Constructed { constructor, arg } => {
-                constructor.includes_type_var(i) || arg.includes_type_var(i)
+            ResolvedType::Tuple(types) => types.iter().any(|ty| ty.includes_type_var(var)),
+            ResolvedType::Fn { arg, ret } => {
+                arg.includes_type_var(var) || ret.includes_type_var(var)
             }
-            ResolvedType::Tmp(j) if i == *j => true,
+            ResolvedType::Constructed { constructor, arg } => {
+                constructor.includes_type_var(var) || arg.includes_type_var(var)
+            }
+            ResolvedType::Var(x) if var == x => true,
             _ => false,
         }
     }
+
+    // /// Generalise the type, i.e. replace all free variables with bound variables in the scope
+    // /// of a universal quantifier.
+    // fn generalize(self) -> Self {
+    //     // 1 - Get all free variables.
+    //     // 2 - Add universal quantification over all these variables.
+    // }
 }
