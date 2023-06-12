@@ -247,8 +247,6 @@ impl Visitor for ResolveSymbols {
         let symbol = TypeSymbol::Path(item.ident.as_ref().clone());
         let resolved = ResolvedType::Ident(idx);
         self.types_stack.push((symbol, resolved));
-        // We want the environment to be restored to this state after the type item.
-        let state = self.get_stack_lengths();
 
         // Create bindings for all ADT data constructors.
         if let TypeDef::Adt(adt) = &*item.def {
@@ -260,6 +258,19 @@ impl Visitor for ResolveSymbols {
                     .data_constructors
                     .insert(data_constructor, binding);
             }
+        }
+
+        // We want the environment to be restored to this state after the type item.
+        let state = self.get_stack_lengths();
+
+        // Create type parameters.
+        for ty_param in &item.ty_params {
+            let symbol = TypeSymbol::Param(ty_param.ident.as_ref().clone());
+            let resolved = ResolvedType::Param {
+                item: ItemId::Type(idx),
+                ident: ty_param.ident.as_ref().clone(),
+            };
+            self.types_stack.push((symbol, resolved));
         }
 
         walk_type_item(self, item);
