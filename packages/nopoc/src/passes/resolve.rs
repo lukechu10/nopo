@@ -263,6 +263,45 @@ impl Visitor for ResolveSymbols {
         }
 
         walk_type_item(self, item);
+
+        // Create a data def for the type item.
+        let kind = match &*item.def {
+            TypeDef::Adt(adt) => TypeKind::Adt(AdtSymbol {
+                variants: adt
+                    .data_constructors
+                    .iter()
+                    .map(|x| AdtVariant {
+                        ident: x.ident.as_ref().clone(),
+                        types: x
+                            .of
+                            .iter()
+                            .map(|ty| self.types_map.types[ty].clone())
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+            TypeDef::Record(record) => TypeKind::Record(RecordSymbol {
+                fields: record
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.ident.as_ref().clone(),
+                            self.types_map.types[&field.ty].clone(),
+                        )
+                    })
+                    .collect(),
+            }),
+            TypeDef::Err => unreachable!(),
+        };
+        let data_def = DataDef {
+            ident: item.ident.clone(),
+            kind,
+            ty_params: item.ty_params.clone(),
+            span: item.span(),
+        };
+        self.types_map.items.insert(idx, data_def);
+
         self.restore_stack(state);
         self.current_item_id = None;
     }
@@ -490,8 +529,8 @@ pub struct AdtVariant {
 
 #[derive(Debug, Default)]
 pub struct TypesMap {
+    pub items: ArenaMap<TypeId, DataDef>,
     pub types: NodeMap<Type, ResolvedType>,
-    pub items: NodeMap<TypeItem, ResolvedType>,
 }
 
 #[derive(Debug, Default)]

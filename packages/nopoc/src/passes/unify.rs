@@ -6,18 +6,18 @@
 
 use std::collections::HashMap;
 
-use la_arena::{Arena, ArenaMap};
+use la_arena::Arena;
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
 
 use crate::ast::visitor::{walk_expr, Visitor};
-use crate::ast::{Expr, LetId, LetItem, Root, Type, TypeDef, TypeId, TypeItem};
+use crate::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
 use crate::parser::lexer::{BinOp, UnaryOp};
 
 use super::map::NodeMap;
-use super::resolution::{
-    BindingData, BindingId, BindingsMap, ResolveLetContents, ResolvedBinding, ResolvedType,
-    ResolvedTypePretty, TypeData, TypeKind,
+use super::resolve::{
+    Binding, BindingId, BindingsMap, ResolveSymbols, ResolvedBinding, ResolvedType,
+    ResolvedTypePretty, TypeKind, TypesMap,
 };
 
 #[derive(Report)]
@@ -44,10 +44,9 @@ struct CannotCreateInfiniteType<'a> {
 
 #[derive(Debug)]
 pub struct UnifyTypes {
-    bindings: Arena<BindingData>,
+    bindings: Arena<Binding>,
     bindings_map: BindingsMap,
-    type_map: NodeMap<Type, ResolvedType>,
-    type_item_map: ArenaMap<TypeId, TypeData>,
+    types_map: TypesMap,
     state: InferState,
     diagnostics: Diagnostics,
 }
@@ -83,12 +82,11 @@ impl InferState {
 }
 
 impl UnifyTypes {
-    pub fn new(resolution: ResolveLetContents, diagnostics: Diagnostics) -> Self {
+    pub fn new(resolve: ResolveSymbols, diagnostics: Diagnostics) -> Self {
         Self {
-            bindings: resolution.bindings,
-            bindings_map: resolution.bindings_map,
-            type_map: resolution.type_map,
-            type_item_map: resolution.type_contents.type_item_map,
+            bindings: resolve.bindings,
+            bindings_map: resolve.bindings_map,
+            types_map: resolve.types_map,
             state: InferState::default(),
             diagnostics,
         }
@@ -115,7 +113,7 @@ impl Visitor for UnifyTypes {
             eprintln!(
                 "{}\t\t: {}",
                 self.bindings[*id].ident,
-                ty.pretty(&self.type_item_map)
+                ty.pretty(&self.types_map.items)
             );
         }
     }
@@ -123,11 +121,11 @@ impl Visitor for UnifyTypes {
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
         match &*item.def {
             TypeDef::Adt(adt) => {
-                let type_data = match &self.type_item_map[idx].kind {
+                let type_data = match &self.types_map.items[idx].kind {
                     TypeKind::Record(_) => unreachable!(),
                     TypeKind::Adt(adt) => adt,
                 };
-                let c_ty = ResolvedType::of_type_item(idx, &self.type_item_map);
+                let c_ty = ResolvedType::of_type_item(idx, &self.types_map.items);
                 for (data_constructor, variant) in
                     adt.data_constructors.iter().zip(&type_data.variants)
                 {
@@ -160,7 +158,7 @@ impl Visitor for UnifyTypes {
             .map(|param| {
                 param.ty.as_ref().map_or_else(
                     || self.state.new_type_var(),
-                    |ty| self.type_map[&*ty].clone(),
+                    |ty| self.types_map.types[&*ty].clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -176,7 +174,7 @@ impl Visitor for UnifyTypes {
             self.state.expr_types_map[&**item.expr].clone(),
         );
         let c_ret_ty = if let Some(ret_ty) = &item.ret_ty {
-            spanned(ret_ty.span(), self.type_map[&**ret_ty].clone())
+            spanned(ret_ty.span(), self.types_map.types[&**ret_ty].clone())
         } else {
             spanned(item.expr.span(), self.state.new_type_var())
         };
@@ -196,7 +194,7 @@ impl Visitor for UnifyTypes {
         if let Expr::Let(let_expr) = &**expr {
             let binding = self.bindings_map.let_exprs[&**let_expr];
             let c_ret = if let Some(ret_ty) = &let_expr.ret_ty {
-                spanned(ret_ty.span(), self.type_map[&**ret_ty].clone())
+                spanned(ret_ty.span(), self.types_map.types[&**ret_ty].clone())
             } else {
                 spanned(let_expr.ident.span(), self.state.new_type_var())
             };
@@ -382,8 +380,8 @@ impl UnifyTypes {
                     SubSearch::Contradiction => {
                         self.diagnostics.add(CouldNotUnifyTypes {
                             span: c.0.span(),
-                            first: spanned(c.0.span(), c.0.pretty(&self.type_item_map)),
-                            second: spanned(c.1.span(), c.1.pretty(&self.type_item_map)),
+                            first: spanned(c.0.span(), c.0.pretty(&self.types_map.items)),
+                            second: spanned(c.1.span(), c.1.pretty(&self.types_map.items)),
                         });
                         None
                     }
@@ -391,8 +389,8 @@ impl UnifyTypes {
                     SubSearch::InfiniteType => {
                         self.diagnostics.add(CannotCreateInfiniteType {
                             span: c.0.span(),
-                            first: spanned(c.0.span(), c.0.pretty(&self.type_item_map)),
-                            second: spanned(c.1.span(), c.1.pretty(&self.type_item_map)),
+                            first: spanned(c.0.span(), c.0.pretty(&self.types_map.items)),
+                            second: spanned(c.1.span(), c.1.pretty(&self.types_map.items)),
                         });
                         None
                     }
