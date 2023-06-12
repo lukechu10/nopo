@@ -236,7 +236,7 @@ impl ResolvedType {
     /// Create a new resolved type representing a curried function.
     ///
     /// For example, a function with params `a`, `b`, `c` and return value `ret` would become the
-    /// type `a -> b -> c -> ret`.
+    /// type `a -> (b -> (c -> ret))`.
     pub fn new_curried_function(args: &[Self], ret: Self) -> Self {
         match args.split_first() {
             Some((first, rest @ [_, ..])) => Self::Fn {
@@ -251,8 +251,38 @@ impl ResolvedType {
         }
     }
 
-    pub fn of_type_item(id: TypeId) -> Self {
-        Self::Ident(id)
+    /// Create a new resolved type representing a curried constructed type.
+    ///
+    /// For example, a type `foo` with type params `'a`, `'b` would become the type `(foo 'a) 'b`.
+    pub fn new_curried_constructed_ty(constructor: Self, args: &[Self]) -> Self {
+        match args.split_first() {
+            Some((first, rest @ [_, ..])) => Self::new_curried_constructed_ty(
+                Self::Constructed {
+                    constructor: Box::new(constructor.clone()),
+                    arg: Box::new(first.clone()),
+                },
+                rest,
+            ),
+            Some((first, _rest @ [])) => Self::Constructed {
+                constructor: Box::new(constructor.clone()),
+                arg: Box::new(first.clone()),
+            },
+            None => constructor,
+        }
+    }
+
+    /// Create a new resolved type referring to a type item.
+    pub fn of_type_item(id: TypeId, type_item_map: &ArenaMap<TypeId, TypeData>) -> Self {
+        let ty_params = type_item_map[id]
+            .ty_params
+            .iter()
+            .enumerate()
+            .map(|(i, _ty)| Self::TypeParamOnType {
+                constructor: id,
+                param_pos: i,
+            })
+            .collect::<Vec<_>>();
+        Self::new_curried_constructed_ty(Self::Ident(id), &ty_params)
     }
 
     /// Pretty print the type.

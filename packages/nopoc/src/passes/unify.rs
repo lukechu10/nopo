@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use la_arena::{Arena, ArenaMap};
-use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
+use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, IntoReport};
 
 use crate::ast::visitor::{walk_expr, Visitor};
@@ -27,15 +27,19 @@ struct CouldNotUnifyTypes<'a> {
     span: Span,
     #[label(message = "this is of type `{first}`")]
     first: Spanned<ResolvedTypePretty<'a>>,
-    #[label(message = "this is of type `{second}`")]
+    #[label(message = "but inferred to be `{second}`")]
     second: Spanned<ResolvedTypePretty<'a>>,
 }
 
 #[derive(IntoReport)]
 #[kind("error")]
 #[message("cannot create infinite type")]
-struct CannotCreateInfiniteType {
+struct CannotCreateInfiniteType<'a> {
     span: Span,
+    #[label(message = "this is of type `{first}`")]
+    first: Spanned<ResolvedTypePretty<'a>>,
+    #[label(message = "but inferred to be `{second}`")]
+    second: Spanned<ResolvedTypePretty<'a>>,
 }
 
 #[derive(Debug)]
@@ -123,15 +127,16 @@ impl Visitor for UnifyTypes {
                     TypeKind::Record(_) => unreachable!(),
                     TypeKind::Adt(adt) => adt,
                 };
+                let c_ty = ResolvedType::of_type_item(idx, &self.type_item_map);
                 for (data_constructor, variant) in
                     adt.data_constructors.iter().zip(&type_data.variants)
                 {
                     let binding = self.bindings_map.data_constructors[&**data_constructor];
-                    let c_ty = ResolvedType::new_curried_function(
-                        &variant.types,
-                        ResolvedType::of_type_item(idx),
-                    );
-                    self.state.binding_types_map.insert(binding, c_ty);
+                    let c_data_constructor_ty =
+                        ResolvedType::new_curried_function(&variant.types, c_ty.clone());
+                    self.state
+                        .binding_types_map
+                        .insert(binding, c_data_constructor_ty);
                 }
             }
             TypeDef::Record(_) => {}
@@ -141,7 +146,7 @@ impl Visitor for UnifyTypes {
 
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
         // The type of the let item.
-        let c_ty = spanned(item.span(), self.state.new_type_var());
+        let c_ty = spanned(item.ident.span(), self.state.new_type_var());
         let binding = self.bindings_map.let_items[&**item];
         self.state
             .binding_types_map
@@ -173,7 +178,7 @@ impl Visitor for UnifyTypes {
         let c_ret_ty = if let Some(ret_ty) = &item.ret_ty {
             spanned(ret_ty.span(), self.type_map[&**ret_ty].clone())
         } else {
-            spanned(item.ident.span(), self.state.new_type_var())
+            spanned(item.expr.span(), self.state.new_type_var())
         };
         self.state
             .constraints
@@ -349,14 +354,9 @@ impl UnifyTypes {
     fn solve(&mut self) -> HashMap<u32, ResolvedType> {
         let mut constraints = self.state.constraints.clone();
 
-        for constraint in &constraints {
-            eprintln!("CONSTRAINT: {} <-> {}", constraint.0.pretty(&self.type_item_map), constraint.1.pretty(&self.type_item_map));
-        }
-
-        let diagnostics: &mut Diagnostics = &mut self.diagnostics;
         let mut solutions = HashMap::<u32, ResolvedType>::new();
         loop {
-            let substitutions = constraints
+            let sub_search = constraints
                 .iter()
                 .cloned()
                 .map(|constraint| {
@@ -367,53 +367,58 @@ impl UnifyTypes {
                 })
                 .collect::<Vec<_>>();
 
-            // Remove all the constraints that are tautologies.
-            constraints = substitutions
+            let mut subs = sub_search
                 .iter()
-                .filter(|(_, sub)| sub != &SubSearch::Tautology)
-                .map(|(c, _)| c)
-                .cloned()
+                .filter_map(|(_, sub)| match sub {
+                    SubSearch::Sub(i, c_ty) => Some((*i, c_ty.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            // Emit all errors found during sub search.
+            constraints = sub_search
+                .into_iter()
+                .filter_map(|(c, sub)| match sub {
+                    SubSearch::Contradiction => {
+                        self.diagnostics.add(CouldNotUnifyTypes {
+                            span: c.0.span(),
+                            first: spanned(c.0.span(), c.0.pretty(&self.type_item_map)),
+                            second: spanned(c.1.span(), c.1.pretty(&self.type_item_map)),
+                        });
+                        None
+                    }
+                    SubSearch::Sub(_, _) => Some(c),
+                    SubSearch::InfiniteType => {
+                        self.diagnostics.add(CannotCreateInfiniteType {
+                            span: c.0.span(),
+                            first: spanned(c.0.span(), c.0.pretty(&self.type_item_map)),
+                            second: spanned(c.1.span(), c.1.pretty(&self.type_item_map)),
+                        });
+                        None
+                    }
+                    SubSearch::None => Some(c),
+                    SubSearch::Tautology => None,
+                })
                 .collect();
 
-            // Handle all substitution errors.
-            for (constraint, substitution) in substitutions.clone() {
-                match substitution {
-                    SubSearch::Contradiction => {
-                        diagnostics.add(CouldNotUnifyTypes {
-                            span: constraint.0.span(),
-                            first: spanned(
-                                constraint.0.span(),
-                                constraint.0.pretty(&self.type_item_map),
-                            ),
-                            second: spanned(
-                                constraint.0.span(),
-                                constraint.1.pretty(&self.type_item_map),
-                            ),
-                        });
-                    }
-                    SubSearch::Sub(i, c_ty) => {
-                        // Substitute in all constraints.
-                        apply_subs(&mut constraints, i, c_ty.clone());
-                        // Substitute in all existing solutions.
-                        for (_, solution) in &mut solutions {
-                            solution.apply_sub(i, c_ty.clone());
-                        }
-
-                        solutions.insert(i, c_ty);
-                    }
-                    SubSearch::InfiniteType => diagnostics.add(CannotCreateInfiniteType {
-                        span: Span::dummy(FileId::DUMMY),
-                    }),
-                    SubSearch::None => {}
-                    SubSearch::Tautology => {}
+            // Apply all substitutions.
+            for sub_i in 0..subs.len() {
+                let (i, c_ty) = subs[sub_i].clone();
+                // Substitute in constraints.
+                apply_subs(&mut constraints, i, c_ty.clone());
+                // Substitute in existing solutions.
+                for (_, solution) in &mut solutions {
+                    solution.apply_sub(i, c_ty.clone());
                 }
+                // Substitute in all other substitutions which have not already been substituted.
+                for sub_j in sub_i + 1..subs.len() {
+                    subs[sub_j].1.apply_sub(i, c_ty.clone());
+                }
+                solutions.insert(i, c_ty);
             }
 
-            // If there are no substitutions to be made left, we are done.
-            if !substitutions
-                .iter()
-                .any(|(_, sub)| matches!(sub, SubSearch::Sub(_, _)))
-            {
+            // If we did not make any substitutions, then we are done.
+            if subs.is_empty() {
                 break;
             }
         }
