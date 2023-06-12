@@ -314,7 +314,6 @@ impl Parser {
         self.expect(Token::Eq);
         let expr = self.parse_expr();
 
-        self.expect(Token::Semi);
         self.finish(
             start,
             LetItem {
@@ -597,10 +596,17 @@ impl Parser {
     }
 
     pub fn parse_expr(&mut self) -> Spanned<Expr> {
-        self.parse_expr_with_min_bp(0)
+        match self.peek_next() {
+            Token::KwLet => {
+                let start = self.start();
+                let expr = self.parse_let_expr();
+                self.finish(start, Expr::Let(expr))
+            }
+            _ => self.parse_expr_with_min_bp(0),
+        }
     }
 
-    pub fn peek_is_expr(&self) -> bool {
+    pub fn peek_is_primary_expr(&self) -> bool {
         match self.peek_next() {
             Token::Ident(_)
             | Token::LBrace
@@ -615,7 +621,6 @@ impl Parser {
             | Token::KwFor
             | Token::KwWhile
             | Token::KwLoop
-            | Token::KwLet
             | Token::KwReturn => true,
             tok if UnaryOp::try_from(tok.clone()).is_ok() => true,
             _ => false,
@@ -700,10 +705,6 @@ impl Parser {
                 let expr = self.parse_loop_expr();
                 self.finish(start, Expr::Loop(expr))
             }
-            Token::KwLet => {
-                let expr = self.parse_let_expr();
-                self.finish(start, Expr::Let(expr))
-            }
             Token::KwReturn => {
                 let expr = self.parse_return_expr();
                 self.finish(start, Expr::Return(expr))
@@ -771,7 +772,7 @@ impl Parser {
             let bin_op_start = self.start();
             let bin_op: BinOp = match self.peek_next().clone().try_into() {
                 Ok(op) => op,
-                Err(_) if self.peek_is_expr() => BinOp::FnCall,
+                Err(_) if self.peek_is_primary_expr() => BinOp::FnCall,
                 Err(_) => break,
             };
             let (l_bp, r_bp) = bin_op.binding_power();
@@ -819,7 +820,7 @@ impl Parser {
         let start = self.start();
         self.expect(Token::LParen);
         let mut elements = Vec::new();
-        while self.peek_is_expr() {
+        while self.peek_is_primary_expr() {
             elements.push(self.parse_expr());
             if self.peek_next() != &Token::Comma {
                 break;
