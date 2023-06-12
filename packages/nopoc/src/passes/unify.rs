@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use la_arena::{Arena, ArenaMap};
 use nopo_diagnostics::span::{spanned, Span, Spanned};
-use nopo_diagnostics::{Diagnostics, IntoReport};
+use nopo_diagnostics::{Diagnostics, Report};
 
 use crate::ast::visitor::{walk_expr, Visitor};
 use crate::ast::{Expr, LetId, LetItem, Root, Type, TypeDef, TypeId, TypeItem};
@@ -20,7 +20,7 @@ use super::resolution::{
     ResolvedTypePretty, TypeData, TypeKind,
 };
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("could not unify types")]
 struct CouldNotUnifyTypes<'a> {
@@ -31,7 +31,7 @@ struct CouldNotUnifyTypes<'a> {
     second: Spanned<ResolvedTypePretty<'a>>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("cannot create infinite type")]
 struct CannotCreateInfiniteType<'a> {

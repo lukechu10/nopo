@@ -7,10 +7,14 @@ pub trait Visitor {
         walk_expr(self, expr)
     }
 
+    fn visit_type(&mut self, _ty: &Spanned<Type>) {}
+
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
         walk_let_item(self, item)
     }
-    fn visit_type_item(&mut self, _idx: TypeId, _item: &Spanned<TypeItem>) {}
+    fn visit_type_item(&mut self, _idx: TypeId, item: &Spanned<TypeItem>) {
+        walk_type_item(self, item)
+    }
     fn visit_mod_item(&mut self, _item: &Spanned<ModItem>) {}
     fn visit_use_item(&mut self, _item: &Spanned<UseItem>) {}
 
@@ -76,12 +80,15 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
         Expr::Let(Spanned(
             LetExpr {
                 ident: _,
-                ret_ty: _,
+                ret_ty,
                 expr,
                 _in,
             },
             _,
         )) => {
+            if let Some(ret_ty) = ret_ty {
+                visitor.visit_type(ret_ty);
+            }
             visitor.visit_expr(expr);
             visitor.visit_expr(_in);
         }
@@ -90,20 +97,48 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
 }
 
 pub fn walk_root<T: Visitor + ?Sized>(visitor: &mut T, root: &Root) {
-    for (idx, let_item) in root.let_items.iter() {
-        visitor.visit_let_item(idx, let_item);
-    }
-    for (idx, type_item) in root.type_items.iter() {
-        visitor.visit_type_item(idx, type_item);
-    }
     for mod_item in &root.mod_items {
         visitor.visit_mod_item(mod_item);
     }
     for use_item in &root.use_items {
         visitor.visit_use_item(use_item);
     }
+
+    for id in &root.items {
+        match id {
+            ItemId::Let(id) => visitor.visit_let_item(*id, &root.let_items[*id]),
+            ItemId::Type(id) => visitor.visit_type_item(*id, &root.type_items[*id]),
+        }
+    }
 }
 
 pub fn walk_let_item<T: Visitor + ?Sized>(visitor: &mut T, item: &LetItem) {
+    for param in &item.params {
+        if let Some(ty) = &param.ty {
+            visitor.visit_type(ty);
+        }
+    }
+    if let Some(ret_ty) = &item.ret_ty {
+        visitor.visit_type(ret_ty);
+    }
+
     visitor.visit_expr(&item.expr);
+}
+
+pub fn walk_type_item<T: Visitor + ?Sized>(visitor: &mut T, item: &TypeItem) {
+    match &*item.def {
+        TypeDef::Adt(adt) => {
+            for data_constructor in &adt.data_constructors {
+                for ty in &data_constructor.of {
+                    visitor.visit_type(ty);
+                }
+            }
+        },
+        TypeDef::Record(record) => {
+            for field in &record.fields {
+                visitor.visit_type(&field.ty);
+            }
+        },
+        TypeDef::Err => {},
+    }
 }

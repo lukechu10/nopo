@@ -3,7 +3,7 @@ use std::ops::Range;
 use la_arena::Arena;
 use logos::Logos;
 use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
-use nopo_diagnostics::{Diagnostics, IntoReport};
+use nopo_diagnostics::{Diagnostics, Report};
 use smol_str::SmolStr;
 
 use self::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
@@ -27,7 +27,7 @@ pub struct Parser {
     diagnostics: Diagnostics,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("expected one of {expected:?}, found {unexpected}")]
 struct UnexpectedToken {
@@ -37,7 +37,7 @@ struct UnexpectedToken {
     unexpected: Spanned<Token>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("expected an item, found {unexpected}")]
 struct ExpectedItem {
@@ -46,7 +46,7 @@ struct ExpectedItem {
     unexpected: Spanned<Token>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("expected an expression, found {unexpected}")]
 struct ExpectedExpr {
@@ -55,7 +55,7 @@ struct ExpectedExpr {
     unexpected: Spanned<Token>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("expected a type, found {unexpected}")]
 struct ExpectedType {
@@ -64,7 +64,7 @@ struct ExpectedType {
     unexpected: Spanned<Token>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("expected a type definition, found {unexpected}")]
 struct ExpectedTypeDef {
@@ -73,7 +73,7 @@ struct ExpectedTypeDef {
     unexpected: Spanned<Token>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("invalid char literal")]
 struct InvalidCharLiteral {
@@ -220,6 +220,7 @@ impl Parser {
     pub fn parse_root(&mut self) -> Root {
         let mut let_items = Arena::new();
         let mut type_items = Arena::new();
+        let mut items = Vec::new();
         let mut mod_items = Vec::new();
         let mut use_items = Vec::new();
         while !self.eof() {
@@ -233,11 +234,13 @@ impl Parser {
             match kw {
                 Token::KwLet => {
                     let item = self.parse_let_item(attrs);
-                    let_items.alloc(item);
+                    let id = let_items.alloc(item);
+                    items.push(ItemId::Let(id));
                 }
                 Token::KwType => {
                     let item = self.parse_type_item(attrs);
-                    type_items.alloc(item);
+                    let id = type_items.alloc(item);
+                    items.push(ItemId::Type(id));
                 }
                 Token::KwMod => {
                     let item = self.parse_mod_item(attrs);
@@ -259,6 +262,7 @@ impl Parser {
         Root {
             let_items,
             type_items,
+            items,
             mod_items,
             use_items,
         }

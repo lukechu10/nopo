@@ -8,11 +8,12 @@ use std::sync::{Arc, Mutex};
 pub use ariadne;
 
 use ariadne::Source;
-pub use nopo_diagnostics_derive::IntoReport;
+pub use nopo_diagnostics_derive::Report;
 
 use span::{FileId, FileIdMap, Span};
 
 pub type Report = ariadne::Report<'static, Span>;
+pub type ReportBuilder = ariadne::ReportBuilder<'static, Span>;
 pub type Label = ariadne::Label<Span>;
 
 impl ariadne::Span for Span {
@@ -67,11 +68,11 @@ impl<'a> ariadne::Cache<FileId> for FileCache<'a> {
 }
 
 pub trait IntoReport {
-    fn into_report(self) -> Report;
+    fn into_report(self) -> ReportBuilder;
 }
 
-impl IntoReport for Report {
-    fn into_report(self) -> Report {
+impl IntoReport for ReportBuilder {
+    fn into_report(self) -> ReportBuilder {
         self
     }
 }
@@ -86,7 +87,7 @@ pub struct DiagnosticsData {
 
 impl Diagnostics {
     pub fn add(&self, report: impl IntoReport) {
-        let report = report.into_report();
+        let report = report.into_report().finish();
         self.0.lock().unwrap().reports.push(report);
     }
 

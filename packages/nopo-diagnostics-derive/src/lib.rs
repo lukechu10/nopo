@@ -4,7 +4,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{parse2, parse_macro_input, Data, DeriveInput, LitStr, Meta, Result, Token};
 
-#[proc_macro_derive(IntoReport, attributes(label, message, kind))]
+#[proc_macro_derive(Report, attributes(label, message, kind))]
 pub fn into_report(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -108,12 +108,11 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
 
     Ok(quote! {
         impl #impl_generics ::nopo_diagnostics::IntoReport for #ident #ty_generics #where_clause {
-            fn into_report(self) -> ::nopo_diagnostics::Report {
+            fn into_report(self) -> ::nopo_diagnostics::ReportBuilder {
                 let #ident { #(#field_idents),* } = self;
                 ::nopo_diagnostics::Report::build(#kind, #span.file_id, #span.start as usize)
                     .with_message(::std::format!(#message))
                     #(#labels)*
-                    .finish()
             }
         }
     })

@@ -1,23 +1,10 @@
 //! Symbol resolution.
-//!
-//! This happens in phases:
-//!
-//! # Phase 1
-//! Go through the module and collect the identifiers of all let and type items.
-//!
-//! # Phase 2
-//! Now that we know all the names of all the types, we can resolve the bodies of the types
-//! themselves.
-//!
-//! # Phase 3
-//! Now that we know all the bodies of all the types, we can finally resolve the bodies of the let
-//! items.
 
 use std::collections::HashMap;
 use std::fmt;
 
 use la_arena::{Arena, ArenaMap, Idx};
-use nopo_diagnostics::{Diagnostics, IntoReport};
+use nopo_diagnostics::{Diagnostics, Report};
 
 use crate::ast::visitor::{walk_expr, walk_let_item, walk_root, Visitor};
 use crate::ast::{
@@ -29,16 +16,16 @@ use nopo_diagnostics::span::{spanned, Span, Spanned};
 
 use super::map::NodeMap;
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("unresolved type parameter `'{param}`")]
 struct UnresolvedTypeParam {
     span: Span,
-    #[label(message = "`'{param}` not found in current scope")]
+    #[label(message = "Type param `'{param}` not found in current scope")]
     param: Spanned<Ident>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("unresolved type `{ty}`")]
 struct UnresolvedType {
@@ -47,7 +34,7 @@ struct UnresolvedType {
     ty: Spanned<Type>,
 }
 
-#[derive(IntoReport)]
+#[derive(Report)]
 #[kind("error")]
 #[message("unresolved binding `{ident}`")]
 struct UnresolvedBinding {

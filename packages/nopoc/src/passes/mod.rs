@@ -1,5 +1,6 @@
 pub mod map;
 pub mod resolution;
+pub mod resolve;
 pub mod unify;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,6 +15,7 @@ use crate::ast::{Ident, Root};
 use nopo_diagnostics::span::{FileId, FileIdMap};
 
 use self::resolution::{CollectIdents, ResolveLetContents, ResolveTypeContents};
+use self::resolve::ResolveSymbols;
 use self::unify::UnifyTypes;
 
 #[derive(Error, Debug)]
@@ -221,14 +223,17 @@ impl ParseResult {
 }
 
 pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) {
-    let mut collect_idents = CollectIdents::default();
-    collect_idents.visit_root(root);
-    let mut resolve_type_contents = ResolveTypeContents::new(collect_idents, diagnostics.clone());
-    resolve_type_contents.visit_root(root);
-    let mut resolve_let_contents =
-        ResolveLetContents::new(resolve_type_contents, diagnostics.clone());
-    resolve_let_contents.visit_root(root);
+    let mut resolve = ResolveSymbols::new(diagnostics.clone());
+    resolve.visit_root(root);
 
-    let mut unify_types = UnifyTypes::new(resolve_let_contents, diagnostics);
-    unify_types.visit_root(root);
+    // let mut collect_idents = CollectIdents::default();
+    // collect_idents.visit_root(root);
+    // let mut resolve_type_contents = ResolveTypeContents::new(collect_idents, diagnostics.clone());
+    // resolve_type_contents.visit_root(root);
+    // let mut resolve_let_contents =
+    //     ResolveLetContents::new(resolve_type_contents, diagnostics.clone());
+    // resolve_let_contents.visit_root(root);
+    //
+    // let mut unify_types = UnifyTypes::new(resolve_let_contents, diagnostics);
+    // unify_types.visit_root(root);
 }

@@ -13,11 +13,19 @@ use nopo_diagnostics::span::Spanned;
 pub type LetId = Idx<Spanned<LetItem>>;
 pub type TypeId = Idx<Spanned<TypeItem>>;
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ItemId {
+    Let(LetId),
+    Type(TypeId),
+}
+
 /// Represents the root of the AST. A source file is composed of a single root node.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Root {
     pub let_items: Arena<Spanned<LetItem>>,
     pub type_items: Arena<Spanned<TypeItem>>,
+    /// The order of the items. This is used for variable scoping.
+    pub items: Vec<ItemId>,
     pub mod_items: Vec<Spanned<ModItem>>,
     pub use_items: Vec<Spanned<UseItem>>,
 }
