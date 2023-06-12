@@ -27,6 +27,8 @@ pub enum Token {
     RArrow,
     #[token("'")]
     Prime,
+    #[token("\\")]
+    BackSlash,
 
     // Operators
     #[token("+")]
@@ -153,6 +155,7 @@ impl fmt::Display for Token {
             Token::Semi => "`;`",
             Token::RArrow => "`->`",
             Token::Prime => "`'`",
+            Token::BackSlash => "`\\`",
             Token::Plus => "`+`",
             Token::Minus => "`-`",
             Token::Star => "`*`",

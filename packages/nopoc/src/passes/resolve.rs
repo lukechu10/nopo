@@ -9,8 +9,9 @@ use nopo_diagnostics::{Diagnostics, IntoReport, Report};
 
 use crate::ast::visitor::{walk_expr, walk_let_item, walk_type_item, Visitor};
 use crate::ast::{
-    BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, ItemId, LetExpr,
-    LetId, LetItem, Param, PathType, TupleType, Type, TypeDef, TypeId, TypeItem, TypeParam,
+    BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, ItemId,
+    LambdaExpr, LambdaParam, LetExpr, LetId, LetItem, Param, PathType, TupleType, Type, TypeDef,
+    TypeId, TypeItem, TypeParam,
 };
 use crate::parser::lexer::BinOp;
 
@@ -65,7 +66,7 @@ pub struct ResolveSymbols {
     diagnostics: Diagnostics,
 }
 
-struct StackLengths {
+struct StackState {
     bindings_stack: usize,
     types_stack: usize,
 }
@@ -83,14 +84,14 @@ impl ResolveSymbols {
         }
     }
 
-    fn get_stack_lengths(&self) -> StackLengths {
-        StackLengths {
+    fn get_stack_state(&self) -> StackState {
+        StackState {
             bindings_stack: self.bindings_stack.len(),
             types_stack: self.types_stack.len(),
         }
     }
 
-    fn restore_stack(&mut self, state: StackLengths) {
+    fn restore_stack_state(&mut self, state: StackState) {
         self.bindings_stack.truncate(state.bindings_stack);
         self.types_stack.truncate(state.types_stack);
     }
@@ -228,7 +229,7 @@ impl Visitor for ResolveSymbols {
         });
         self.bindings_map.let_items.insert(item, let_binding);
         // We want the environment to be restored to this state after the let item.
-        let state = self.get_stack_lengths();
+        let state = self.get_stack_state();
         // Create bindings for all params.
         for param in &item.params {
             let param_binding = self.new_binding_scope(Binding {
@@ -237,7 +238,7 @@ impl Visitor for ResolveSymbols {
             self.bindings_map.params.insert(param, param_binding);
         }
         walk_let_item(self, item);
-        self.restore_stack(state);
+        self.restore_stack_state(state);
         self.current_item_id = None;
     }
 
@@ -261,7 +262,7 @@ impl Visitor for ResolveSymbols {
         }
 
         // We want the environment to be restored to this state after the type item.
-        let state = self.get_stack_lengths();
+        let state = self.get_stack_state();
 
         // Create type parameters.
         for ty_param in &item.ty_params {
@@ -313,7 +314,7 @@ impl Visitor for ResolveSymbols {
         };
         self.types_map.items.insert(idx, data_def);
 
-        self.restore_stack(state);
+        self.restore_stack_state(state);
         self.current_item_id = None;
     }
 
@@ -336,18 +337,32 @@ impl Visitor for ResolveSymbols {
                 // We cannot access the binding inside the expression itself.
                 self.visit_expr(expr);
                 // Now we can add the binding.
-                let binding = self.bindings.alloc(Binding {
+                let binding = self.new_binding_scope(Binding {
                     ident: ident.as_ref().clone(),
                 });
                 self.bindings_map.let_exprs.insert(let_expr, binding);
 
-                self.bindings_stack.push(binding);
                 self.visit_expr(_in);
 
                 // Resolve the types of ret.
                 if let Some(ret_ty) = ret_ty {
                     self.visit_type(ret_ty);
                 }
+            }
+            Expr::Lambda(Spanned(LambdaExpr { params, expr }, _)) => {
+                // Lambdas create a new scope.
+                let state = self.get_stack_state();
+                // Create bindings for all params.
+                for param in params {
+                    let binding = self.new_binding_scope(Binding {
+                        ident: param.ident.as_ref().clone(),
+                    });
+                    self.bindings_map.lambda_params.insert(param, binding);
+                }
+
+                self.visit_expr(expr);
+
+                self.restore_stack_state(state);
             }
             Expr::Binary(Spanned(BinaryExpr { lhs, op, rhs: _ }, _)) if **op == BinOp::Dot => {
                 // We only want to visit the LHS of a member access since the RHS will depend on
@@ -557,6 +572,8 @@ pub struct BindingsMap {
     pub let_items: NodeMap<LetItem, BindingId>,
     /// Mapping from let expressions to their bindings.
     pub let_exprs: NodeMap<LetExpr, BindingId>,
+    /// Mapping from lambda params to their bindings.
+    pub lambda_params: NodeMap<LambdaParam, BindingId>,
 }
 
 pub type BindingId = Idx<Binding>;

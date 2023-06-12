@@ -31,6 +31,7 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
                 visitor.visit_expr(expr);
             }
         }
+        Expr::Lambda(Spanned(LambdaExpr { params: _, expr }, _)) => visitor.visit_expr(expr),
         Expr::Tuple(Spanned(TupleExpr { elements }, _)) => {
             for element in elements {
                 visitor.visit_expr(element);
@@ -133,12 +134,12 @@ pub fn walk_type_item<T: Visitor + ?Sized>(visitor: &mut T, item: &TypeItem) {
                     visitor.visit_type(ty);
                 }
             }
-        },
+        }
         TypeDef::Record(record) => {
             for field in &record.fields {
                 visitor.visit_type(&field.ty);
             }
-        },
-        TypeDef::Err => {},
+        }
+        TypeDef::Err => {}
     }
 }

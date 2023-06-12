@@ -191,27 +191,49 @@ impl Visitor for UnifyTypes {
     }
 
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::Let(let_expr) = &**expr {
-            let binding = self.bindings_map.let_exprs[&**let_expr];
-            let c_ret = if let Some(ret_ty) = &let_expr.ret_ty {
-                spanned(ret_ty.span(), self.types_map.types[&**ret_ty].clone())
-            } else {
-                spanned(let_expr.ident.span(), self.state.new_type_var())
-            };
-            self.state
-                .binding_types_map
-                .insert(binding, c_ret.clone().unspan());
-            // Constrain let binding expression.
-            self.visit_expr(&let_expr.expr);
-            let c_expr = self.state.expr_types_map[&**let_expr.expr].clone();
-            self.state
-                .constraints
-                .push(Constraint(c_ret, spanned(let_expr.expr.span(), c_expr)));
+        // Handle expressions which create new bindings seperately since we want to create a type
+        // var for the binding first.
+        match &**expr {
+            Expr::Let(let_expr) => {
+                let binding = self.bindings_map.let_exprs[&**let_expr];
+                let c_ret = if let Some(ret_ty) = &let_expr.ret_ty {
+                    spanned(ret_ty.span(), self.types_map.types[&**ret_ty].clone())
+                } else {
+                    spanned(let_expr.ident.span(), self.state.new_type_var())
+                };
+                self.state
+                    .binding_types_map
+                    .insert(binding, c_ret.clone().unspan());
+                // Constrain let binding expression.
+                self.visit_expr(&let_expr.expr);
+                let c_expr = self.state.expr_types_map[&**let_expr.expr].clone();
+                self.state
+                    .constraints
+                    .push(Constraint(c_ret, spanned(let_expr.expr.span(), c_expr)));
 
-            self.visit_expr(&let_expr._in);
-            let c_in = self.state.expr_types_map[&**let_expr._in].clone();
-            self.state.expr_types_map.insert(expr, c_in);
-            return;
+                self.visit_expr(&let_expr._in);
+                let c_in = self.state.expr_types_map[&**let_expr._in].clone();
+                self.state.expr_types_map.insert(expr, c_in);
+                return;
+            }
+            Expr::Lambda(lambda_expr) => {
+                let c_params = lambda_expr
+                    .params
+                    .iter()
+                    .map(|_| self.state.new_type_var())
+                    .collect::<Vec<_>>();
+                for (param, c_param) in lambda_expr.params.iter().zip(&c_params) {
+                    let binding = self.bindings_map.lambda_params[param];
+                    self.state.binding_types_map.insert(binding, c_param.clone());
+                }
+                self.visit_expr(&lambda_expr.expr);
+                let c_expr = self.state.expr_types_map[&*lambda_expr.expr].clone();
+
+                let c_ty = ResolvedType::new_curried_function(&c_params, c_expr);
+                self.state.expr_types_map.insert(expr, c_ty);
+                return;
+            }
+            _ => (),
         }
 
         // This ensures that self.state.expr_types_map is instantiated for all child nodes.
@@ -232,6 +254,7 @@ impl Visitor for UnifyTypes {
             Expr::Block(_) => {
                 todo!("unify block expressions (should we even keep block expressions?)")
             }
+            Expr::Lambda(_) => unreachable!(),
             Expr::Tuple(tuple_expr) => ResolvedType::Tuple(
                 tuple_expr
                     .elements

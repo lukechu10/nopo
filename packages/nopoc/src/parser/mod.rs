@@ -615,6 +615,7 @@ impl Parser {
             Token::Ident(_)
             | Token::LBrace
             | Token::LParen
+            | Token::BackSlash
             | Token::LitTrue
             | Token::LitFalse
             | Token::LitFloat(_)
@@ -651,10 +652,11 @@ impl Parser {
                     }
                 }
             }
-            Token::LParen => {
-                let expr = self.parse_tuple_expr();
-                expr
+            Token::BackSlash => {
+                let expr = self.parse_lambda_expr();
+                self.finish(start, Expr::Lambda(expr))
             }
+            Token::LParen => self.parse_tuple_expr(),
             Token::LitTrue => {
                 let _ = self.get_next();
                 self.finish(start, Expr::LitBool(true))
@@ -818,6 +820,29 @@ impl Parser {
         }
         self.expect(Token::RBrace);
         self.finish(start, BlockExpr { exprs })
+    }
+
+    pub fn parse_lambda_expr(&mut self) -> Spanned<LambdaExpr> {
+        let start = self.start();
+        self.expect(Token::BackSlash);
+
+        let mut params = Vec::new();
+        while self.peek_next() != &Token::Eq {
+            let start = self.start();
+            let param = LambdaParam {
+                ident: self.parse_ident(),
+            };
+            params.push(self.finish(start, param));
+        }
+        self.expect(Token::Eq);
+        let expr = self.parse_expr();
+        self.finish(
+            start,
+            LambdaExpr {
+                params,
+                expr: Box::new(expr),
+            },
+        )
     }
 
     pub fn parse_tuple_expr(&mut self) -> Spanned<Expr> {

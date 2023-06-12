@@ -154,6 +154,7 @@ pub enum Expr {
     Ident(Spanned<IdentExpr>),
 
     Block(Spanned<BlockExpr>),
+    Lambda(Spanned<LambdaExpr>),
     Tuple(Spanned<TupleExpr>),
     Record(Spanned<RecordExpr>),
 
@@ -188,6 +189,17 @@ pub struct IdentExpr {
 #[derive(Debug, PartialEq, Eq)]
 pub struct BlockExpr {
     pub exprs: Vec<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct LambdaExpr {
+    pub params: Vec<Spanned<LambdaParam>>,
+    pub expr: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct LambdaParam {
+    pub ident: Spanned<Ident>,
 }
 
 /// A tuple expression. A tuple with only one element should be represented as just an expression
