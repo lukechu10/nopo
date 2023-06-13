@@ -317,8 +317,8 @@ impl From<Ident> for SmolStr {
 impl fmt::Display for Ident {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Ident::Ok(str) => write!(f, "{str}"),
-            Ident::Err => write!(f, "ERR"),
+            Ident::Ok(str) => str.fmt(f),
+            Ident::Err => "ERR".fmt(f),
         }
     }
 }

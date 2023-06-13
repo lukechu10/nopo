@@ -4,9 +4,8 @@
 //!
 //! Prefix all constraint types in code with `c_` to distinguish from syntax elements.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use la_arena::Arena;
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
 
@@ -16,8 +15,8 @@ use crate::parser::lexer::{BinOp, UnaryOp};
 
 use super::map::NodeMap;
 use super::resolve::{
-    Binding, BindingId, BindingsMap, ResolveSymbols, ResolvedBinding, ResolvedType,
-    ResolvedTypePretty, TypeKind, TypeVar, TypesMap,
+    BindingId, BindingsMap, ResolveSymbols, ResolvedBinding, ResolvedType, ResolvedTypePretty,
+    TypeKind, TypeVar, TypesMap,
 };
 
 #[derive(Report)]
@@ -44,19 +43,18 @@ struct CannotCreateInfiniteType<'a> {
 
 #[derive(Debug)]
 pub struct UnifyTypes {
-    bindings: Arena<Binding>,
     bindings_map: BindingsMap,
     types_map: TypesMap,
-    state: InferState,
+    state: GenerateConstraints,
+    /// Contains the type of all the bindings.
+    binding_types_map: HashMap<BindingId, ResolvedType>,
     diagnostics: Diagnostics,
 }
 
 /// Temporary state used in unifying types.
 #[derive(Debug, Default)]
-pub struct InferState {
+pub struct GenerateConstraints {
     type_var_counter: u32,
-    /// Contains the type of all the bindings.
-    binding_types_map: HashMap<BindingId, ResolvedType>,
     /// Keep track of all the types of all the expressions.
     ///
     /// This will not contain final inferred types but only temporary types, since this is only
@@ -72,7 +70,7 @@ pub struct InferState {
 #[derive(Debug, Clone)]
 pub struct Constraint(Spanned<ResolvedType>, Spanned<ResolvedType>);
 
-impl InferState {
+impl GenerateConstraints {
     /// Create a new type variable.
     pub fn new_type_var(&mut self) -> ResolvedType {
         let counter = self.type_var_counter;
@@ -84,10 +82,10 @@ impl InferState {
 impl UnifyTypes {
     pub fn new(resolve: ResolveSymbols, diagnostics: Diagnostics) -> Self {
         Self {
-            bindings: resolve.bindings,
             bindings_map: resolve.bindings_map,
             types_map: resolve.types_map,
-            state: InferState::default(),
+            state: GenerateConstraints::default(),
+            binding_types_map: HashMap::new(),
             diagnostics,
         }
     }
@@ -101,20 +99,23 @@ impl Visitor for UnifyTypes {
         }
 
         for (idx, item) in root.let_items.iter() {
+            self.state = GenerateConstraints::default();
             self.visit_let_item(idx, item);
-        }
+            let solutions = self.state.solve(&self.diagnostics, &self.types_map);
 
-        let solutions = self.solve();
-        // Back substitute back into bindings.
-        for (id, ty) in &mut self.state.binding_types_map {
-            for (var, sub) in &solutions {
-                ty.apply_sub(var, sub.clone());
+            let binding_id = self.bindings_map.let_items[&*item];
+            let mut binding_ty = self.binding_types_map[&binding_id].clone();
+
+            // Substitute in solutions.
+            for (var, sub) in solutions {
+                binding_ty.apply_sub(&var, sub);
             }
-            eprintln!(
-                "{}\t\t: {}",
-                self.bindings[*id].ident,
-                ty.pretty(&self.types_map.items)
-            );
+            // Generalize the type of this binding.
+            let binding_ty = binding_ty.generalize();
+
+            let pretty = binding_ty.pretty(&self.types_map.items);
+            eprintln!("{:>20}: {pretty}", item.ident);
+            self.binding_types_map.insert(binding_id, binding_ty);
         }
     }
 
@@ -132,8 +133,7 @@ impl Visitor for UnifyTypes {
                     let binding = self.bindings_map.data_constructors[&**data_constructor];
                     let c_data_constructor_ty =
                         ResolvedType::new_curried_function(&variant.types, c_ty.clone());
-                    self.state
-                        .binding_types_map
+                    self.binding_types_map
                         .insert(binding, c_data_constructor_ty);
                 }
             }
@@ -146,8 +146,7 @@ impl Visitor for UnifyTypes {
         // The type of the let item.
         let c_ty = spanned(item.ident.span(), self.state.new_type_var());
         let binding = self.bindings_map.let_items[&**item];
-        self.state
-            .binding_types_map
+        self.binding_types_map
             .insert(binding, c_ty.clone().unspan());
 
         // Constraints for let params. Since params can have explicit type annotations, we can use
@@ -164,7 +163,7 @@ impl Visitor for UnifyTypes {
             .collect::<Vec<_>>();
         for (c_ty, param) in c_params_ty.iter().zip(&item.params) {
             let binding = self.bindings_map.params[&**param];
-            self.state.binding_types_map.insert(binding, c_ty.clone());
+            self.binding_types_map.insert(binding, c_ty.clone());
         }
 
         // Constraint for return type.
@@ -201,8 +200,7 @@ impl Visitor for UnifyTypes {
                 } else {
                     spanned(let_expr.ident.span(), self.state.new_type_var())
                 };
-                self.state
-                    .binding_types_map
+                self.binding_types_map
                     .insert(binding, c_ret.clone().unspan());
                 // Constrain let binding expression.
                 self.visit_expr(&let_expr.expr);
@@ -224,9 +222,7 @@ impl Visitor for UnifyTypes {
                     .collect::<Vec<_>>();
                 for (param, c_param) in lambda_expr.params.iter().zip(&c_params) {
                     let binding = self.bindings_map.lambda_params[param];
-                    self.state
-                        .binding_types_map
-                        .insert(binding, c_param.clone());
+                    self.binding_types_map.insert(binding, c_param.clone());
                 }
                 self.visit_expr(&lambda_expr.expr);
                 let c_expr = self.state.expr_types_map[&*lambda_expr.expr].clone();
@@ -246,7 +242,8 @@ impl Visitor for UnifyTypes {
                 // Lookup binding and set that as the expression of the type.
                 let binding = &self.bindings_map.idents[&**ident_expr];
                 if let ResolvedBinding::Ok(binding) = binding {
-                    self.state.binding_types_map[binding].clone()
+                    let c_binding = self.binding_types_map[binding].clone();
+                    self.state.instantiate(c_binding)
                 } else {
                     // If this ident was not resolved, it could potentially be anything.
                     // FIXME: make sure this does not produce extra errors about unbounded types.
@@ -372,12 +369,16 @@ impl Visitor for UnifyTypes {
     }
 }
 
-impl UnifyTypes {
+impl GenerateConstraints {
     /// Solve the constraints by using substitutions.
-    fn solve(&mut self) -> HashMap<TypeVar, ResolvedType> {
-        let mut constraints = self.state.constraints.clone();
+    fn solve(
+        &mut self,
+        diagnostics: &Diagnostics,
+        types_map: &TypesMap,
+    ) -> BTreeMap<TypeVar, ResolvedType> {
+        let mut constraints = self.constraints.clone();
 
-        let mut solutions = HashMap::<TypeVar, ResolvedType>::new();
+        let mut solutions = BTreeMap::<TypeVar, ResolvedType>::new();
         loop {
             let sub_search = constraints
                 .iter()
@@ -403,19 +404,19 @@ impl UnifyTypes {
                 .into_iter()
                 .filter_map(|(c, sub)| match sub {
                     SubSearch::Contradiction => {
-                        self.diagnostics.add(CouldNotUnifyTypes {
+                        diagnostics.add(CouldNotUnifyTypes {
                             span: c.0.span(),
-                            first: spanned(c.0.span(), c.0.pretty(&self.types_map.items)),
-                            second: spanned(c.1.span(), c.1.pretty(&self.types_map.items)),
+                            first: spanned(c.0.span(), c.0.pretty(&types_map.items)),
+                            second: spanned(c.1.span(), c.1.pretty(&types_map.items)),
                         });
                         None
                     }
                     SubSearch::Sub(_, _) => Some(c),
                     SubSearch::InfiniteType => {
-                        self.diagnostics.add(CannotCreateInfiniteType {
+                        diagnostics.add(CannotCreateInfiniteType {
                             span: c.0.span(),
-                            first: spanned(c.0.span(), c.0.pretty(&self.types_map.items)),
-                            second: spanned(c.1.span(), c.1.pretty(&self.types_map.items)),
+                            first: spanned(c.0.span(), c.0.pretty(&types_map.items)),
+                            second: spanned(c.1.span(), c.1.pretty(&types_map.items)),
                         });
                         None
                     }
@@ -447,6 +448,19 @@ impl UnifyTypes {
         }
 
         solutions
+    }
+
+    /// Instantiate all the for alls on the left of the type. Will not instantiate for alls in the
+    /// middle of a type.
+    fn instantiate(&mut self, ty: ResolvedType) -> ResolvedType {
+        match ty {
+            ResolvedType::ForAll { var, mut ty } => {
+                let new_var = self.new_type_var();
+                ty.apply_sub(&var, new_var);
+                self.instantiate(*ty)
+            }
+            _ => ty,
+        }
     }
 }
 
@@ -549,6 +563,9 @@ impl Constraint {
                 }
                 SubSearch::None
             }
+            (ForAll { var: _, ty: lhs_ty }, ForAll { var: _, ty: rhs_ty }) => {
+                Self::generate_subs(lhs_ty, rhs_ty)
+            }
             (lhs, rhs) if lhs == rhs => SubSearch::Tautology,
             _ => SubSearch::Contradiction,
         }
@@ -572,6 +589,7 @@ impl ResolvedType {
                 constructor.apply_sub(var, c_ty.clone());
                 arg.apply_sub(var, c_ty);
             }
+            ResolvedType::ForAll { var: x, ty } if var != x => ty.apply_sub(var, c_ty),
             ResolvedType::Var(x) if x == var => *self = c_ty,
             _ => {}
         }
@@ -586,15 +604,58 @@ impl ResolvedType {
             ResolvedType::Constructed { constructor, arg } => {
                 constructor.includes_type_var(var) || arg.includes_type_var(var)
             }
+            ResolvedType::ForAll { var: x, ty } if var != x => ty.includes_type_var(var),
             ResolvedType::Var(x) if var == x => true,
             _ => false,
         }
     }
 
-    // /// Generalise the type, i.e. replace all free variables with bound variables in the scope
-    // /// of a universal quantifier.
-    // fn generalize(self) -> Self {
-    //     // 1 - Get all free variables.
-    //     // 2 - Add universal quantification over all these variables.
-    // }
+    /// Generalise the type, i.e. replace all free variables with bound variables in the scope
+    /// of a universal quantifier.
+    fn generalize(self) -> Self {
+        // 1 - Get all free variables.
+        let mut free = Vec::new();
+        self.get_free_variables(&mut Vec::new(), &mut free);
+        let free = free.into_iter().cloned().collect::<Vec<_>>();
+        // 2 - Add universal quantification over all these variables.
+        let mut ty = self;
+        for var in free {
+            ty = Self::ForAll {
+                var: var.clone(),
+                ty: Box::new(ty),
+            }
+        }
+        ty
+    }
+
+    fn get_free_variables<'a>(&'a self, bound: &mut Vec<&'a TypeVar>, free: &mut Vec<&'a TypeVar>) {
+        match self {
+            ResolvedType::Tuple(types) => {
+                for ty in types {
+                    ty.get_free_variables(bound, free);
+                }
+            }
+            ResolvedType::Fn { arg, ret } => {
+                arg.get_free_variables(bound, free);
+                ret.get_free_variables(bound, free);
+            }
+            ResolvedType::Constructed { constructor, arg } => {
+                constructor.get_free_variables(bound, free);
+                arg.get_free_variables(bound, free);
+            }
+            ResolvedType::ForAll { var, ty } => {
+                bound.push(var);
+                ty.get_free_variables(bound, free);
+                bound.pop();
+            }
+            ResolvedType::Var(x) => {
+                if bound.iter().find(|y| &x == *y).is_none()
+                    && free.iter().find(|y| &x == *y).is_none()
+                {
+                    free.push(x);
+                }
+            }
+            _ => {}
+        }
+    }
 }
