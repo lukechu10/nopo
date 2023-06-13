@@ -9,20 +9,6 @@ use smol_str::SmolStr;
 use crate::ast::*;
 use crate::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
 
-pub struct Parser {
-    /// All the tokens.
-    tokens: Vec<(Token, Range<usize>)>,
-    /// An index into `tokens`, representing the current token.
-    /// Initially 0, and incremented by `next_token` after each token is consumed.
-    ///
-    /// The first token is a dummy token, so when calling `get_next` for the first time, the first
-    /// real token is returned.
-    cursor: usize,
-    /// The current file that is being parsed.
-    file_id: FileId,
-    diagnostics: Diagnostics,
-}
-
 #[derive(Report)]
 #[kind("error")]
 #[message("expected one of {expected:?}, found {unexpected}")]
@@ -77,6 +63,21 @@ struct InvalidCharLiteral {
     #[label(message = "char literal should only contain one character")]
     char: Spanned<String>,
 }
+
+pub struct Parser {
+    /// All the tokens.
+    tokens: Vec<(Token, Range<usize>)>,
+    /// An index into `tokens`, representing the current token.
+    /// Initially 0, and incremented by `next_token` after each token is consumed.
+    ///
+    /// The first token is a dummy token, so when calling `get_next` for the first time, the first
+    /// real token is returned.
+    cursor: usize,
+    /// The current file that is being parsed.
+    file_id: FileId,
+    diagnostics: Diagnostics,
+}
+
 
 /// A temporary struct used to store the start of a span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

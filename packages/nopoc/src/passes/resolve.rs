@@ -308,6 +308,10 @@ impl ResolveSymbols {
 impl Visitor for ResolveSymbols {
     fn visit_let_item(&mut self, idx: LetId, item: &Spanned<LetItem>) {
         self.current_item_id = Some(ItemId::Let(idx));
+        // If no params, then this is a value instead of a function. Don't allow recursive values.
+        if item.params.is_empty() {
+            walk_let_item(self, item);
+        }
         // Create binding for let item itself.
         let let_binding = self.new_binding_scope(Binding {
             ident: item.ident.as_ref().clone(),
@@ -322,7 +326,9 @@ impl Visitor for ResolveSymbols {
             });
             self.bindings_map.params.insert(param, param_binding);
         }
-        walk_let_item(self, item);
+        if !item.params.is_empty() {
+            walk_let_item(self, item);
+        }
         self.restore_stack_state(state);
         self.current_item_id = None;
     }
