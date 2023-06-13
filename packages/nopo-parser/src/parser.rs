@@ -6,12 +6,8 @@ use nopo_diagnostics::span::{spanned, FileId, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
 use smol_str::SmolStr;
 
-use self::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
 use crate::ast::*;
-
-pub mod lexer;
-#[cfg(test)]
-mod tests;
+use crate::lexer::{BinOp, PostfixOp, Token, TypeBinOp, UnaryOp};
 
 pub struct Parser {
     /// All the tokens.

@@ -26,7 +26,7 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
 
         let diagnostics = Diagnostics::default();
         let repl_id = map.create_virtual_file("<repl>", line.to_string());
-        let mut parser = crate::parser::Parser::new(repl_id, line, diagnostics.clone());
+        let mut parser = nopo_parser::parser::Parser::new(repl_id, line, diagnostics.clone());
         let root = parser.parse_root();
         if !diagnostics.eprint(&map) {
             continue;

@@ -214,6 +214,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nopo-parser"
+version = "0.1.0"
+dependencies = [
+ "la-arena",
+ "logos",
+ "nopo-diagnostics",
+ "smol_str",
+]
+
+[[package]]
 name = "nopo-vm"
 version = "0.1.0"
 
@@ -224,8 +234,8 @@ dependencies = [
  "clap",
  "expect-test",
  "la-arena",
- "logos",
  "nopo-diagnostics",
+ "nopo-parser",
  "smol_str",
  "thiserror",
 ]

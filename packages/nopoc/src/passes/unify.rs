@@ -8,10 +8,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
+use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
+use nopo_parser::lexer::{BinOp, UnaryOp};
+use nopo_parser::visitor::{walk_expr, Visitor};
 
-use crate::ast::visitor::{walk_expr, Visitor};
-use crate::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
-use crate::parser::lexer::{BinOp, UnaryOp};
 use crate::passes::check_records::TypeCheckRecords;
 
 use super::map::NodeMap;

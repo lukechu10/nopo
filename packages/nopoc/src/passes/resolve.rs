@@ -8,13 +8,13 @@ use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, IntoReport, Report};
 use smol_str::SmolStr;
 
-use crate::ast::visitor::{walk_expr, walk_let_item, walk_type_item, Visitor};
-use crate::ast::{
+use nopo_parser::ast::{
     BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, ItemId,
     LambdaExpr, LambdaParam, LetExpr, LetId, LetItem, Param, PathType, TupleType, Type, TypeDef,
     TypeId, TypeItem, TypeParam,
 };
-use crate::parser::lexer::BinOp;
+use nopo_parser::lexer::BinOp;
+use nopo_parser::visitor::{walk_expr, walk_let_item, walk_type_item, Visitor};
 
 use super::map::NodeMap;
 

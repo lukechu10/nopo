@@ -2,8 +2,6 @@ use clap::Parser;
 use std::error::Error;
 use std::path::PathBuf;
 
-pub mod ast;
-pub mod parser;
 pub mod passes;
 pub mod repl;
 

@@ -1,13 +1,11 @@
 //! Abstract Syntax Tree.
 
-pub mod visitor;
-
 use std::fmt;
 
 use la_arena::{Arena, Idx};
 use smol_str::SmolStr;
 
-use crate::parser::lexer::{BinOp, UnaryOp};
+use crate::lexer::{BinOp, UnaryOp};
 use nopo_diagnostics::span::Spanned;
 
 pub type LetId = Idx<Spanned<LetItem>>;

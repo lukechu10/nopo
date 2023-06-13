@@ -1,4 +1,5 @@
 pub mod check_records;
+pub mod codegen;
 pub mod map;
 pub mod resolve;
 pub mod unify;
@@ -10,9 +11,9 @@ use std::path::{Path, PathBuf};
 use nopo_diagnostics::Diagnostics;
 use thiserror::Error;
 
-use crate::ast::visitor::Visitor;
-use crate::ast::{Ident, Root};
 use nopo_diagnostics::span::{FileId, FileIdMap};
+use nopo_parser::ast::{Ident, Root};
+use nopo_parser::visitor::Visitor;
 
 use self::resolve::ResolveSymbols;
 use self::unify::UnifyTypes;
@@ -74,7 +75,7 @@ fn parse_file(
     }
     let name = path.file_stem().unwrap().to_string_lossy().to_string();
 
-    let mut parser = crate::parser::Parser::new(file_id, &source, diagnostics);
+    let mut parser = nopo_parser::parser::Parser::new(file_id, &source, diagnostics);
     let ast = parser.parse_root();
     Ok(ParsedFile {
         path: path.to_path_buf(),

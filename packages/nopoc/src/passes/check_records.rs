@@ -5,9 +5,9 @@
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
 
-use crate::ast::visitor::{walk_expr, Visitor};
-use crate::ast::{Expr, Ident};
-use crate::parser::lexer::BinOp;
+use nopo_parser::ast::{Expr, Ident};
+use nopo_parser::lexer::BinOp;
+use nopo_parser::visitor::{walk_expr, Visitor};
 
 use super::resolve::{ResolvedType, ResolvedTypePretty, TypeKind};
 use super::unify::{Constraint, GenerateConstraints, UnifyTypes};

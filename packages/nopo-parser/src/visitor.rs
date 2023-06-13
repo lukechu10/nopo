@@ -1,6 +1,6 @@
 use nopo_diagnostics::span::Spanned;
 
-use super::*;
+use crate::ast::*;
 
 pub trait Visitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {

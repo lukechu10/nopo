@@ -68,7 +68,7 @@ impl FileIdMap {
     pub fn get_virtual_source(&self, id: FileId) -> &str {
         match &self.map[&id] {
             FileDesc::Path(_) => panic!("{id:?} references a real file"),
-            FileDesc::Virtual { source, .. } => source
+            FileDesc::Virtual { source, .. } => source,
         }
     }
 }
