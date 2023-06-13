@@ -7,7 +7,7 @@ use std::ops::{Index, IndexMut};
 /// pointer value as a key in the lookup table.
 #[derive(Debug)]
 pub struct NodeMap<N, T> {
-    map: HashMap<*const N, T>,
+    pub map: HashMap<*const N, T>,
 }
 
 impl<N, T> NodeMap<N, T> {

@@ -12,6 +12,7 @@ use nopo_diagnostics::{Diagnostics, Report};
 use crate::ast::visitor::{walk_expr, Visitor};
 use crate::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
 use crate::parser::lexer::{BinOp, UnaryOp};
+use crate::passes::check_records::TypeCheckRecords;
 
 use super::map::NodeMap;
 use super::resolve::{
@@ -41,13 +42,14 @@ struct CannotCreateInfiniteType<'a> {
     second: Spanned<ResolvedTypePretty<'a>>,
 }
 
+/// Type unification pass (type inference).
 #[derive(Debug)]
 pub struct UnifyTypes {
-    bindings_map: BindingsMap,
-    types_map: TypesMap,
-    state: GenerateConstraints,
+    pub bindings_map: BindingsMap,
     /// Contains the type of all the bindings.
-    binding_types_map: HashMap<BindingId, ResolvedType>,
+    pub binding_types_map: HashMap<BindingId, ResolvedType>,
+    pub types_map: TypesMap,
+    state: GenerateConstraints,
     diagnostics: Diagnostics,
 }
 
@@ -55,20 +57,17 @@ pub struct UnifyTypes {
 #[derive(Debug, Default)]
 pub struct GenerateConstraints {
     type_var_counter: u32,
-    /// Keep track of all the types of all the expressions.
-    ///
-    /// This will not contain final inferred types but only temporary types, since this is only
-    /// used to generate type constraints.
-    expr_types_map: NodeMap<Expr, ResolvedType>,
+    /// Keep track of all the types of all the expressions in this item.
+    pub expr_types_map: NodeMap<Expr, ResolvedType>,
     /// A list of constraints.
-    constraints: Vec<Constraint>,
+    pub constraints: Vec<Constraint>,
 }
 
 /// Represents a type constraint, constraing the LHS and the RHS together.
 ///
 /// The spans represent where the constraints are coming from.
 #[derive(Debug, Clone)]
-pub struct Constraint(Spanned<ResolvedType>, Spanned<ResolvedType>);
+pub struct Constraint(pub Spanned<ResolvedType>, pub Spanned<ResolvedType>);
 
 impl GenerateConstraints {
     /// Create a new type variable.
@@ -83,9 +82,9 @@ impl UnifyTypes {
     pub fn new(resolve: ResolveSymbols, diagnostics: Diagnostics) -> Self {
         Self {
             bindings_map: resolve.bindings_map,
+            binding_types_map: HashMap::new(),
             types_map: resolve.types_map,
             state: GenerateConstraints::default(),
-            binding_types_map: HashMap::new(),
             diagnostics,
         }
     }
@@ -101,15 +100,35 @@ impl Visitor for UnifyTypes {
         for (idx, item) in root.let_items.iter() {
             self.state = GenerateConstraints::default();
             self.visit_let_item(idx, item);
-            let solutions = self.state.solve(&self.diagnostics, &self.types_map);
+            let mut state = std::mem::take(&mut self.state);
+
+            let solutions = state.solve(&self.diagnostics, &self.types_map);
 
             let binding_id = self.bindings_map.let_items[&*item];
             let mut binding_ty = self.binding_types_map[&binding_id].clone();
 
             // Substitute in solutions.
             for (var, sub) in solutions {
-                binding_ty.apply_sub(&var, sub);
+                binding_ty.apply_sub(&var, sub.clone());
+                for expr_ty in state.expr_types_map.map.values_mut() {
+                    expr_ty.apply_sub(&var, sub.clone());
+                }
             }
+
+            // Get types of member and record expressions.
+            let mut check_records =
+                TypeCheckRecords::new(self, &mut state, self.diagnostics.clone());
+            check_records.visit_let_item(idx, item);
+
+            // Solve constraints again now that we have types from records.
+            let solutions = state.solve(&self.diagnostics, &self.types_map);
+            for (var, sub) in solutions {
+                binding_ty.apply_sub(&var, sub.clone());
+                for expr_ty in self.state.expr_types_map.map.values_mut() {
+                    expr_ty.apply_sub(&var, sub.clone());
+                }
+            }
+
             // Generalize the type of this binding.
             let binding_ty = binding_ty.generalize();
 
@@ -123,8 +142,8 @@ impl Visitor for UnifyTypes {
         match &*item.def {
             TypeDef::Adt(adt) => {
                 let type_data = match &self.types_map.items[idx].kind {
-                    TypeKind::Record(_) => unreachable!(),
                     TypeKind::Adt(adt) => adt,
+                    _ => unreachable!(),
                 };
                 let c_ty = ResolvedType::of_type_item(idx, &self.types_map.items);
                 for (data_constructor, variant) in
@@ -239,7 +258,10 @@ impl Visitor for UnifyTypes {
         }
 
         // This ensures that self.state.expr_types_map is instantiated for all child nodes.
-        walk_expr(self, expr);
+        match &**expr {
+            Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => self.visit_expr(&bin_expr.lhs),
+            _ => walk_expr(self, expr),
+        }
 
         let c_ty = match &**expr {
             Expr::Ident(ident_expr) => {
@@ -267,17 +289,19 @@ impl Visitor for UnifyTypes {
             ),
             // We don't try to infer record types from their fields.
             Expr::Record(_) => self.state.new_type_var(),
-            Expr::Binary(binary_expr) => {
-                let c_lhs = self.state.expr_types_map[&*binary_expr.lhs].clone();
-                let c_rhs = self.state.expr_types_map[&*binary_expr.rhs].clone();
+            // We don't try to infer member expressions from the field.
+            Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => self.state.new_type_var(),
+            Expr::Binary(bin_expr) => {
+                let c_lhs = self.state.expr_types_map[&*bin_expr.lhs].clone();
+                let c_rhs = self.state.expr_types_map[&*bin_expr.rhs].clone();
                 // Handle fn calls seperately.
-                if *binary_expr.op == BinOp::FnCall {
+                if *bin_expr.op == BinOp::FnCall {
                     // Constrain LHS to be a function that takes the RHS.
                     let c_ret = self.state.new_type_var();
                     self.state.constraints.push(Constraint(
-                        spanned(binary_expr.lhs.span(), c_lhs),
+                        spanned(bin_expr.lhs.span(), c_lhs),
                         spanned(
-                            binary_expr.lhs.span(),
+                            bin_expr.lhs.span(),
                             ResolvedType::new_curried_function(&[c_rhs], c_ret.clone()),
                         ),
                     ));
@@ -285,7 +309,7 @@ impl Visitor for UnifyTypes {
                 } else {
                     // TODO: binary operations on types other than int (introduce new operator or
                     // ad-hoc polymorphism?)
-                    let (c_arg, c_ret) = match *binary_expr.op {
+                    let (c_arg, c_ret) = match *bin_expr.op {
                         BinOp::Plus
                         | BinOp::Minus
                         | BinOp::Mul
@@ -306,12 +330,12 @@ impl Visitor for UnifyTypes {
                         BinOp::FnCall => unreachable!(),
                     };
                     self.state.constraints.push(Constraint(
-                        spanned(binary_expr.lhs.span(), c_lhs),
-                        spanned(binary_expr.op.span(), c_arg.clone()),
+                        spanned(bin_expr.lhs.span(), c_lhs),
+                        spanned(bin_expr.op.span(), c_arg.clone()),
                     ));
                     self.state.constraints.push(Constraint(
-                        spanned(binary_expr.rhs.span(), c_rhs),
-                        spanned(binary_expr.op.span(), c_arg),
+                        spanned(bin_expr.rhs.span(), c_rhs),
+                        spanned(bin_expr.op.span(), c_arg),
                     ));
                     c_ret
                 }

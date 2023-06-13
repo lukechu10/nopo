@@ -1,3 +1,4 @@
+pub mod check_records;
 pub mod map;
 pub mod resolve;
 pub mod unify;
@@ -223,7 +224,9 @@ impl ParseResult {
 pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) {
     let mut resolve = ResolveSymbols::new(diagnostics.clone());
     resolve.visit_root(root);
-
-    let mut unify_types = UnifyTypes::new(resolve, diagnostics);
-    unify_types.visit_root(root);
+    if !diagnostics.is_empty() {
+        return;
+    }
+    let mut unify = UnifyTypes::new(resolve, diagnostics.clone());
+    unify.visit_root(root);
 }

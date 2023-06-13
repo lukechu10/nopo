@@ -50,7 +50,10 @@ struct UnresolvedBinding {
 #[message("wrong number of type parameters for type `{ty}`")]
 struct WrongNumberOfTypeParams {
     span: Span,
-    #[label(message = "{expected} type parameter(s) expected but {found} found", order = 1)]
+    #[label(
+        message = "{expected} type parameter(s) expected but {found} found",
+        order = 1
+    )]
     ty: Spanned<Ident>,
     #[label(message = "`{ty}` defined here", order = 2)]
     def_site: Spanned<Ident>,
@@ -121,15 +124,15 @@ impl ResolveSymbols {
 
     fn resolve_type(&mut self, ty: &Spanned<Type>) -> ResolvedType {
         let resolved = self.resolve_type_inner(ty);
+        let data_def = self.data_def_of_constructed(&resolved);
+        let expected = self.num_of_ty_params(&resolved);
         if let ResolvedType::Constructed {
             constructor,
             arg: _,
         } = &resolved
         {
+            let found = resolved.num_of_constructed();
             // Check that resolved is not a kind.
-            let data_def = self.data_def_of_constructed(&resolved);
-            let expected = self.num_of_ty_params(&resolved);
-            let found = self.num_of_constructed(&resolved);
             match (expected, found) {
                 (Some(expected), found) if expected == found => resolved,
                 (Some(expected), found) => {
@@ -149,6 +152,19 @@ impl ResolveSymbols {
                     });
                     ResolvedType::Err
                 }
+            }
+        } else if let Some(expected) = expected {
+            if expected != 0 {
+                self.diagnostics.add(WrongNumberOfTypeParams {
+                    span: ty.span(),
+                    ty: data_def.unwrap().ident.clone().respan(ty.span()),
+                    def_site: data_def.unwrap().ident.clone(),
+                    expected,
+                    found: 0,
+                });
+                ResolvedType::Err
+            } else {
+                resolved
             }
         } else {
             resolved
@@ -244,25 +260,9 @@ impl ResolveSymbols {
             .map(|def| def.ty_params.len())
     }
 
-    fn num_of_constructed(&self, ty: &ResolvedType) -> usize {
-        match ty {
-            ResolvedType::Constructed {
-                constructor,
-                arg: _,
-            } => self.num_of_constructed(constructor) + 1,
-            _ => 0,
-        }
-    }
-
     fn data_def_of_constructed(&self, ty: &ResolvedType) -> Option<&DataDef> {
-        match ty {
-            ResolvedType::Ident(id) => Some(&self.types_map.items[*id]),
-            ResolvedType::Constructed {
-                constructor,
-                arg: _,
-            } => self.data_def_of_constructed(constructor),
-            _ => None,
-        }
+        ty.ident_of_constructed()
+            .map(|id| &self.types_map.items[id])
     }
 
     /// Create a new scope for a binding and return the created binding id.
@@ -356,9 +356,19 @@ impl Visitor for ResolveSymbols {
             self.types_stack.push((symbol, resolved));
         }
 
+        // Create a temporary data def since we might access it while resolving the types of the
+        // ADT data constructors.
+        let data_def = DataDef {
+            ident: item.ident.clone(),
+            kind: TypeKind::Tmp,
+            ty_params: item.ty_params.clone(),
+            span: item.span(),
+        };
+        self.types_map.items.insert(idx, data_def);
+
         walk_type_item(self, item);
 
-        // Create a data def for the type item.
+        // Update data def with updated information.
         let kind = match &*item.def {
             TypeDef::Adt(adt) => TypeKind::Adt(AdtSymbol {
                 variants: adt
@@ -388,13 +398,7 @@ impl Visitor for ResolveSymbols {
             }),
             TypeDef::Err => unreachable!(),
         };
-        let data_def = DataDef {
-            ident: item.ident.clone(),
-            kind,
-            ty_params: item.ty_params.clone(),
-            span: item.span(),
-        };
-        self.types_map.items.insert(idx, data_def);
+        self.types_map.items[idx].kind = kind;
 
         self.restore_stack_state(state);
         self.current_item_id = None;
@@ -560,6 +564,27 @@ impl ResolvedType {
         Self::new_curried_constructed_ty(Self::Ident(id), &ty_params)
     }
 
+    pub fn ident_of_constructed(&self) -> Option<TypeId> {
+        match self {
+            ResolvedType::Ident(id) => Some(*id),
+            ResolvedType::Constructed {
+                constructor,
+                arg: _,
+            } => constructor.ident_of_constructed(),
+            _ => None,
+        }
+    }
+
+    fn num_of_constructed(&self) -> usize {
+        match self {
+            ResolvedType::Constructed {
+                constructor,
+                arg: _,
+            } => constructor.num_of_constructed() + 1,
+            _ => 0,
+        }
+    }
+
     /// Pretty print the type.
     pub fn pretty<'a>(&'a self, map: &'a ArenaMap<TypeId, DataDef>) -> ResolvedTypePretty<'a> {
         ResolvedTypePretty(self, map)
@@ -615,6 +640,8 @@ pub struct DataDef {
 pub enum TypeKind {
     Record(RecordSymbol),
     Adt(AdtSymbol),
+    /// Temporary dummy variable.
+    Tmp,
 }
 impl TypeKind {
     pub fn as_record(&self) -> Option<&RecordSymbol> {
