@@ -119,8 +119,8 @@ impl ResolveSymbols {
                 if let Some(resolved) = self.try_resolve_type_symbol(&symbol) {
                     resolved
                 } else if let Some(ItemId::Let(_)) = self.current_item_id {
-                    // If we are inside a let, we can create type parameters implicitly.
-                    let resolved = ResolvedType::Var(ident.as_ref().clone().into());
+                    // If we are inside a let, we can create type parameter implicitly.
+                    let resolved = ResolvedType::Param(ident.as_ref().clone().into());
                     self.types_stack.push((symbol, resolved.clone()));
                     resolved
                 } else {
@@ -265,7 +265,7 @@ impl Visitor for ResolveSymbols {
         // Create type parameters.
         for ty_param in &item.ty_params {
             let symbol = TypeSymbol::Param(ty_param.ident.as_ref().clone());
-            let resolved = ResolvedType::Var(ty_param.ident.as_ref().clone().into());
+            let resolved = ResolvedType::Param(ty_param.ident.as_ref().clone().into());
             self.types_stack.push((symbol, resolved));
         }
 
@@ -400,7 +400,14 @@ pub enum ResolvedType {
     Float,
     String,
     Char,
-    /// A type variable. This can either be free or bound.
+    /// A type parameter.
+    ///
+    /// Unlike type variables, these are initially universally quantified, such that constraining
+    /// the type param to a specific type is a contradiction (since there is more than a single
+    /// type in the domain).
+    Param(TypeVar),
+    /// A type variable. This can either be free or bound. Type vars can not be explicitly
+    /// referenced (TODO: update when inferred types are added).
     ///
     /// Since identifiers cannot start with numbers, automatically generated type vars are always
     /// integers.
@@ -499,7 +506,8 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
             ResolvedType::Float => write!(f, "float")?,
             ResolvedType::String => write!(f, "string")?,
             ResolvedType::Char => write!(f, "char")?,
-            ResolvedType::Var(var) => write!(f, "'{var}")?,
+            ResolvedType::Param(var) => write!(f, "'{var}")?,
+            ResolvedType::Var(var) => write!(f, "{{{var}}}")?,
             ResolvedType::ForAll { var, ty } => write!(f, "'{var} . {}", ty.pretty(self.1))?,
             ResolvedType::Err => write!(f, "ERR")?,
         }

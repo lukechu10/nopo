@@ -546,7 +546,6 @@ impl Parser {
 
         loop {
             let op = if self.peek_next() == &Token::RArrow {
-                self.expect(Token::RArrow);
                 TypeBinOp::Fn
             } else if self.peek_is_type() {
                 TypeBinOp::Apply
@@ -557,6 +556,9 @@ impl Parser {
             let (l_bp, r_bp) = op.binding_power();
             if l_bp < min_bp {
                 break;
+            }
+            if op == TypeBinOp::Fn {
+                self.expect(Token::RArrow);
             }
 
             let rhs = self.parse_type_with_min_bp(r_bp);

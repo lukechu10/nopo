@@ -131,8 +131,12 @@ impl Visitor for UnifyTypes {
                     adt.data_constructors.iter().zip(&type_data.variants)
                 {
                     let binding = self.bindings_map.data_constructors[&**data_constructor];
+                    // We can generalize here since we don't do type inference for type items.
                     let c_data_constructor_ty =
-                        ResolvedType::new_curried_function(&variant.types, c_ty.clone());
+                        ResolvedType::new_curried_function(&variant.types, c_ty.clone())
+                            .generalize();
+                    let pretty = c_data_constructor_ty.pretty(&self.types_map.items);
+                    eprintln!("{:>20}: {pretty}", data_constructor.ident);
                     self.binding_types_map
                         .insert(binding, c_data_constructor_ty);
                 }
@@ -590,7 +594,7 @@ impl ResolvedType {
                 arg.apply_sub(var, c_ty);
             }
             ResolvedType::ForAll { var: x, ty } if var != x => ty.apply_sub(var, c_ty),
-            ResolvedType::Var(x) if x == var => *self = c_ty,
+            ResolvedType::Var(x) | ResolvedType::Param(x) if x == var => *self = c_ty,
             _ => {}
         }
     }
@@ -628,6 +632,7 @@ impl ResolvedType {
         ty
     }
 
+    /// Get all type variables and type parameters.
     fn get_free_variables<'a>(&'a self, bound: &mut Vec<&'a TypeVar>, free: &mut Vec<&'a TypeVar>) {
         match self {
             ResolvedType::Tuple(types) => {
@@ -648,7 +653,7 @@ impl ResolvedType {
                 ty.get_free_variables(bound, free);
                 bound.pop();
             }
-            ResolvedType::Var(x) => {
+            ResolvedType::Var(x) | ResolvedType::Param(x) => {
                 if bound.iter().find(|y| &x == *y).is_none()
                     && free.iter().find(|y| &x == *y).is_none()
                 {
