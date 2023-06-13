@@ -202,7 +202,7 @@ impl Visitor for UnifyTypes {
         };
         self.state
             .constraints
-            .push(Constraint(c_ret_ty.clone(), c_expr_ty));
+            .push(Constraint(c_expr_ty, c_ret_ty.clone()));
 
         // Add type for the whole let item.
         let c_fn_ty = spanned(
@@ -476,6 +476,7 @@ impl GenerateConstraints {
             }
         }
 
+        self.constraints = constraints;
         solutions
     }
 

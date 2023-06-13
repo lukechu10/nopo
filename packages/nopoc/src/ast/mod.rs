@@ -297,7 +297,7 @@ pub struct UseItem {
     pub path: Spanned<Ident>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum Ident {
     Ok(SmolStr),
     Err,
@@ -320,6 +320,12 @@ impl fmt::Display for Ident {
             Ident::Ok(str) => str.fmt(f),
             Ident::Err => "ERR".fmt(f),
         }
+    }
+}
+
+impl fmt::Debug for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.to_string().fmt(f)
     }
 }
 
