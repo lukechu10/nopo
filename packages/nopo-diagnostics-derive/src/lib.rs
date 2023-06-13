@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{parse2, parse_macro_input, Data, DeriveInput, LitStr, Meta, Result, Token};
+use syn::{parse2, parse_macro_input, Data, DeriveInput, LitInt, LitStr, Meta, Result, Token};
 
 #[proc_macro_derive(Report, attributes(label, message, kind))]
 pub fn into_report(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -81,7 +81,7 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
         .map(|field| {
             field.attrs.iter().find_map(|attr| match &attr.meta {
                 Meta::List(meta) if meta.path.is_ident("label") => {
-                    Some(parse2::<LabelMeta>(meta.tokens.clone()))
+                    Some(parse2::<LabelData>(meta.tokens.clone()))
                 }
                 _ => None,
             })
@@ -95,11 +95,13 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
         .filter_map(|(field, label)| label.as_ref().and_then(|label| Some((field, label))))
         .map(|(field, label)| {
             let ident = field.ident.as_ref().expect("not tuple struct");
-            let message = &label.value;
+            let message = &label.message.value;
+            let order = label.order.as_ref().map(|order| order.value.base10_parse().expect("could not parse order")).unwrap_or(0);
             quote! {
                 .with_label(
                     ::nopo_diagnostics::Label::new(<_ as ::nopo_diagnostics::span::GetSpan>::span(&#ident))
-                        .with_message(::std::format!(#message)),
+                        .with_message(::std::format!(#message))
+                        .with_order(#order),
                 )
             }
         });
@@ -120,20 +122,43 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
 
 mod kw {
     syn::custom_keyword!(message);
+    syn::custom_keyword!(order);
 }
 
-struct LabelMeta {
-    _message_ident: kw::message,
+struct LabelMeta<Kw, E> {
+    _message_ident: Kw,
     _eq: Token![=],
-    value: LitStr,
+    value: E,
 }
 
-impl Parse for LabelMeta {
+impl<Kw: Parse, E: Parse> Parse for LabelMeta<Kw, E> {
     fn parse(input: ParseStream) -> Result<Self> {
         Ok(Self {
             _message_ident: input.parse()?,
             _eq: input.parse()?,
             value: input.parse()?,
+        })
+    }
+}
+
+struct LabelData {
+    message: LabelMeta<kw::message, LitStr>,
+    _comma: Option<Token![,]>,
+    order: Option<LabelMeta<kw::order, LitInt>>,
+}
+
+impl Parse for LabelData {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let message = input.parse()?;
+        let (_comma, order) = if input.peek(Token![,]) {
+            (Some(input.parse()?), Some(input.parse()?))
+        } else {
+            Default::default()
+        };
+        Ok(Self {
+            message,
+            _comma,
+            order,
         })
     }
 }

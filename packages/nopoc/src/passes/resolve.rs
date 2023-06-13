@@ -45,6 +45,28 @@ struct UnresolvedBinding {
     ident: Spanned<Ident>,
 }
 
+#[derive(Report)]
+#[kind("error")]
+#[message("wrong number of type parameters for type `{ty}`")]
+struct WrongNumberOfTypeParams {
+    span: Span,
+    #[label(message = "{expected} type parameter(s) expected but {found} found", order = 1)]
+    ty: Spanned<Ident>,
+    #[label(message = "`{ty}` defined here", order = 2)]
+    def_site: Spanned<Ident>,
+    expected: usize,
+    found: usize,
+}
+
+#[derive(Report)]
+#[kind("error")]
+#[message("`{ty}` is not a kind")]
+struct NotAKind<'a> {
+    span: Span,
+    #[label(message = "`{ty}` is a type, not a kind")]
+    ty: Spanned<ResolvedTypePretty<'a>>,
+}
+
 /// AST pass for resolving symbols. Does not resolve record fields since that requires type
 /// information.
 #[derive(Debug)]
@@ -97,7 +119,44 @@ impl ResolveSymbols {
         self.types_stack.truncate(state.types_stack);
     }
 
-    fn resolve_type(&mut self, ty: &Type) -> ResolvedType {
+    fn resolve_type(&mut self, ty: &Spanned<Type>) -> ResolvedType {
+        let resolved = self.resolve_type_inner(ty);
+        if let ResolvedType::Constructed {
+            constructor,
+            arg: _,
+        } = &resolved
+        {
+            // Check that resolved is not a kind.
+            let data_def = self.data_def_of_constructed(&resolved);
+            let expected = self.num_of_ty_params(&resolved);
+            let found = self.num_of_constructed(&resolved);
+            match (expected, found) {
+                (Some(expected), found) if expected == found => resolved,
+                (Some(expected), found) => {
+                    self.diagnostics.add(WrongNumberOfTypeParams {
+                        span: ty.span(),
+                        ty: data_def.unwrap().ident.clone().respan(ty.span()),
+                        def_site: data_def.unwrap().ident.clone(),
+                        expected,
+                        found,
+                    });
+                    ResolvedType::Err
+                }
+                (None, _found) => {
+                    self.diagnostics.add(NotAKind {
+                        span: ty.span(),
+                        ty: spanned(ty.span(), constructor.pretty(&self.types_map.items)),
+                    });
+                    ResolvedType::Err
+                }
+            }
+        } else {
+            resolved
+        }
+    }
+
+    /// Resolve a type or kind.
+    fn resolve_type_inner(&mut self, ty: &Type) -> ResolvedType {
         // TODO: check modules
         match ty {
             Type::Path(ty) => self.resolve_path_type(ty),
@@ -110,7 +169,7 @@ impl ResolveSymbols {
             }
             Type::Constructed(Spanned(ConstructedType { constructor, arg }, _)) => {
                 ResolvedType::Constructed {
-                    constructor: Box::new(self.resolve_type(constructor)),
+                    constructor: Box::new(self.resolve_type_inner(constructor)),
                     arg: Box::new(self.resolve_type(arg)),
                 }
             }
@@ -175,6 +234,34 @@ impl ResolveSymbols {
             Some(resolved.clone())
         } else {
             None
+        }
+    }
+
+    /// Get the number of type parameters expected. If the type is not a constructed type of
+    /// identifiers, returns `None`.
+    fn num_of_ty_params(&self, ty: &ResolvedType) -> Option<usize> {
+        self.data_def_of_constructed(ty)
+            .map(|def| def.ty_params.len())
+    }
+
+    fn num_of_constructed(&self, ty: &ResolvedType) -> usize {
+        match ty {
+            ResolvedType::Constructed {
+                constructor,
+                arg: _,
+            } => self.num_of_constructed(constructor) + 1,
+            _ => 0,
+        }
+    }
+
+    fn data_def_of_constructed(&self, ty: &ResolvedType) -> Option<&DataDef> {
+        match ty {
+            ResolvedType::Ident(id) => Some(&self.types_map.items[*id]),
+            ResolvedType::Constructed {
+                constructor,
+                arg: _,
+            } => self.data_def_of_constructed(constructor),
+            _ => None,
         }
     }
 

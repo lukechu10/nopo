@@ -265,7 +265,8 @@ impl Visitor for UnifyTypes {
                     .map(|element| self.state.expr_types_map[element].clone())
                     .collect(),
             ),
-            Expr::Record(_) => todo!("unify record types"),
+            // We don't try to infer record types from their fields.
+            Expr::Record(_) => self.state.new_type_var(),
             Expr::Binary(binary_expr) => {
                 let c_lhs = self.state.expr_types_map[&*binary_expr.lhs].clone();
                 let c_rhs = self.state.expr_types_map[&*binary_expr.rhs].clone();
