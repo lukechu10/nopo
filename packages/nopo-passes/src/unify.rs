@@ -12,7 +12,7 @@ use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
 use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_expr, Visitor};
 
-use crate::passes::check_records::TypeCheckRecords;
+use crate::check_records::TypeCheckRecords;
 
 use super::map::NodeMap;
 use super::resolve::{

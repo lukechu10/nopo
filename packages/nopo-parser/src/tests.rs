@@ -1,7 +1,8 @@
 use expect_test::{expect, Expect};
 use nopo_diagnostics::span::FileIdMap;
+use nopo_diagnostics::Diagnostics;
 
-use super::*;
+use crate::parser::Parser;
 
 #[track_caller]
 fn check_root(input: &str, expect: Expect) {
@@ -33,8 +34,8 @@ fn check_expr(input: &str, expect: Expect) {
 fn test_parse_root() {
     check_root(
         r#"
-let x = 1;
-let double x = 2 * x;
+let x = 1
+let double x = 2 * x
 type list 'a = Nil | Cons of 'a (list 'a)
 "#,
         expect![[r#"
@@ -42,7 +43,7 @@ type list 'a = Nil | Cons of 'a (list 'a)
                 let_items: Arena {
                     len: 2,
                     data: [
-                        (1..11) LetItem {
+                        (1..10) LetItem {
                             attrs: (1..0) Attributes {
                                 attrs: [],
                             },
@@ -54,28 +55,28 @@ type list 'a = Nil | Cons of 'a (list 'a)
                                 1,
                             ),
                         },
-                        (12..33) LetItem {
-                            attrs: (12..11) Attributes {
+                        (11..31) LetItem {
+                            attrs: (11..10) Attributes {
                                 attrs: [],
                             },
-                            vis: (12..11) Priv,
-                            ident: (16..22) "double",
+                            vis: (11..10) Priv,
+                            ident: (15..21) "double",
                             params: [
-                                (23..24) Param {
-                                    ident: (23..24) "x",
+                                (22..23) Param {
+                                    ident: (22..23) "x",
                                     ty: None,
                                 },
                             ],
                             ret_ty: None,
-                            expr: (27..32) Binary(
-                                (27..32) BinaryExpr {
-                                    lhs: (27..28) LitInt(
+                            expr: (26..31) Binary(
+                                (26..31) BinaryExpr {
+                                    lhs: (26..27) LitInt(
                                         2,
                                     ),
-                                    op: (29..30) Mul,
-                                    rhs: (31..32) Ident(
-                                        (31..32) IdentExpr {
-                                            ident: (31..32) "x",
+                                    op: (28..29) Mul,
+                                    rhs: (30..31) Ident(
+                                        (30..31) IdentExpr {
+                                            ident: (30..31) "x",
                                         },
                                     ),
                                 },
@@ -86,48 +87,44 @@ type list 'a = Nil | Cons of 'a (list 'a)
                 type_items: Arena {
                     len: 1,
                     data: [
-                        (34..75) TypeItem {
-                            attrs: (34..33) Attributes {
+                        (32..73) TypeItem {
+                            attrs: (32..31) Attributes {
                                 attrs: [],
                             },
-                            vis: (34..33) Priv,
-                            ident: (39..43) "list",
+                            vis: (32..31) Priv,
+                            ident: (37..41) "list",
                             ty_params: [
-                                (44..46) TypeParam {
-                                    ident: (45..46) "a",
+                                (42..44) TypeParam {
+                                    ident: (43..44) "a",
                                 },
                             ],
-                            def: (49..75) Adt(
-                                (49..75) AdtDef {
+                            def: (47..73) Adt(
+                                (47..73) AdtDef {
                                     data_constructors: [
-                                        (49..52) DataConstructor {
-                                            ident: (49..52) "Nil",
+                                        (47..50) DataConstructor {
+                                            ident: (47..50) "Nil",
                                             of: [],
                                         },
-                                        (55..75) DataConstructor {
-                                            ident: (55..59) "Cons",
+                                        (53..73) DataConstructor {
+                                            ident: (53..57) "Cons",
                                             of: [
-                                                (63..75) Constructed(
-                                                    (63..75) ConstructedType {
-                                                        constructor: (63..65) Param(
-                                                            (63..65) TypeParam {
-                                                                ident: (64..65) "a",
+                                                (61..63) Param(
+                                                    (61..63) TypeParam {
+                                                        ident: (62..63) "a",
+                                                    },
+                                                ),
+                                                (65..72) Constructed(
+                                                    (65..72) ConstructedType {
+                                                        constructor: (65..69) Path(
+                                                            (65..69) PathType {
+                                                                path: [
+                                                                    (65..69) "list",
+                                                                ],
                                                             },
                                                         ),
-                                                        arg: (67..74) Constructed(
-                                                            (67..74) ConstructedType {
-                                                                constructor: (67..71) Path(
-                                                                    (67..71) PathType {
-                                                                        path: [
-                                                                            (67..71) "list",
-                                                                        ],
-                                                                    },
-                                                                ),
-                                                                arg: (72..74) Param(
-                                                                    (72..74) TypeParam {
-                                                                        ident: (73..74) "a",
-                                                                    },
-                                                                ),
+                                                        arg: (70..72) Param(
+                                                            (70..72) TypeParam {
+                                                                ident: (71..72) "a",
                                                             },
                                                         ),
                                                     },
@@ -140,6 +137,17 @@ type list 'a = Nil | Cons of 'a (list 'a)
                         },
                     ],
                 },
+                items: [
+                    Let(
+                        Idx::<LetItem>>(0),
+                    ),
+                    Let(
+                        Idx::<LetItem>>(1),
+                    ),
+                    Type(
+                        Idx::<TypeItem>>(0),
+                    ),
+                ],
                 mod_items: [],
                 use_items: [],
             }

@@ -25,6 +25,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
+name = "bumpalo"
+version = "3.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3e2c3daef883ecc1b5d58c15adae93470a91d425f3532ba1695849656af3fc1"
+
+[[package]]
 name = "cc"
 version = "1.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -217,6 +223,7 @@ dependencies = [
 name = "nopo-parser"
 version = "0.1.0"
 dependencies = [
+ "expect-test",
  "la-arena",
  "logos",
  "nopo-diagnostics",
@@ -224,18 +231,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "nopo-passes"
+version = "0.1.0"
+dependencies = [
+ "la-arena",
+ "nopo-diagnostics",
+ "nopo-parser",
+ "smol_str",
+ "thiserror",
+]
+
+[[package]]
 name = "nopo-vm"
 version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "nopo-diagnostics",
+ "nopo-parser",
+ "nopo-passes",
+]
 
 [[package]]
 name = "nopoc"
 version = "0.1.0"
 dependencies = [
  "clap",
- "expect-test",
  "la-arena",
  "nopo-diagnostics",
  "nopo-parser",
+ "nopo-passes",
+ "nopo-vm",
  "smol_str",
  "thiserror",
 ]

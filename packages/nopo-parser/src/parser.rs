@@ -826,7 +826,7 @@ impl Parser {
         self.expect(Token::BackSlash);
 
         let mut params = Vec::new();
-        while self.peek_next() != &Token::Eq {
+        while let Token::Ident(_) = self.peek_next() {
             let start = self.start();
             let param = LambdaParam {
                 ident: self.parse_ident(),

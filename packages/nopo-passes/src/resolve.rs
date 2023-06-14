@@ -16,7 +16,7 @@ use nopo_parser::ast::{
 use nopo_parser::lexer::BinOp;
 use nopo_parser::visitor::{walk_expr, walk_let_item, walk_type_item, Visitor};
 
-use super::map::NodeMap;
+use crate::map::NodeMap;
 
 #[derive(Report)]
 #[kind("error")]
@@ -626,7 +626,7 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
             ResolvedType::Char => write!(f, "char")?,
             ResolvedType::Param(var) => write!(f, "'{var}")?,
             ResolvedType::Var(var) => write!(f, "{{{var}}}")?,
-            ResolvedType::ForAll { var, ty } => write!(f, "'{var} . {}", ty.pretty(self.1))?,
+            ResolvedType::ForAll { var, ty } => write!(f, "forall '{var} . {}", ty.pretty(self.1))?,
             ResolvedType::Err => write!(f, "ERR")?,
         }
 

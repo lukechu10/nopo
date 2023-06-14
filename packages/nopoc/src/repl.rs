@@ -3,9 +3,10 @@
 use std::error::Error;
 use std::io::{BufRead, Write};
 
-use crate::passes::run_resolution_passes;
 use nopo_diagnostics::span::FileIdMap;
 use nopo_diagnostics::Diagnostics;
+use nopo_passes::run_resolution_passes;
+use nopo_vm::compile_and_run;
 
 pub fn start_repl() -> Result<(), Box<dyn Error>> {
     let mut map = FileIdMap::new();
@@ -32,10 +33,12 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        run_resolution_passes(&root, diagnostics.clone());
+        let unify = run_resolution_passes(&root, diagnostics.clone());
         if !diagnostics.eprint(&map) {
             continue;
         }
+
+        compile_and_run(&root, unify.unwrap());
     }
 
     Ok(())

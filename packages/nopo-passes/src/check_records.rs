@@ -9,8 +9,8 @@ use nopo_parser::ast::{Expr, Ident};
 use nopo_parser::lexer::BinOp;
 use nopo_parser::visitor::{walk_expr, Visitor};
 
-use super::resolve::{ResolvedType, ResolvedTypePretty, TypeKind};
-use super::unify::{Constraint, GenerateConstraints, UnifyTypes};
+use crate::resolve::{ResolvedType, ResolvedTypePretty, TypeKind};
+use crate::unify::{Constraint, GenerateConstraints, UnifyTypes};
 
 #[derive(Report)]
 #[kind("error")]

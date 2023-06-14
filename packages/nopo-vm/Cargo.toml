@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bumpalo = "3.13.0"
+nopo-diagnostics = { path = "../nopo-diagnostics" }
+nopo-parser = { path = "../nopo-parser" }
+nopo-passes = { path = "../nopo-passes" }

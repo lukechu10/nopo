@@ -2,7 +2,6 @@ use clap::Parser;
 use std::error::Error;
 use std::path::PathBuf;
 
-pub mod passes;
 pub mod repl;
 
 /// The Nopo CLI.
@@ -24,7 +23,7 @@ fn entry() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     if let Some(input) = args.input {
-        passes::compile(&input)?;
+        nopo_passes::compile(&input)?;
         Ok(())
     } else {
         repl::start_repl()

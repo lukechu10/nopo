@@ -23,15 +23,3 @@ pub mod instr {
         /* TODO */
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::mem::size_of;
-
-    use super::*;
-
-    #[test]
-    fn test_op_is_32_bits() {
-        assert_eq!(size_of::<instr::Op>(), 4);
-    }
-}
