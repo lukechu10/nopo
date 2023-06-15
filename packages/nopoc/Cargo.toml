@@ -5,10 +5,12 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
+dirs = "5.0.1"
 nopo-diagnostics = { path = "../nopo-diagnostics" }
 nopo-parser = { path = "../nopo-parser" }
 nopo-passes = { path = "../nopo-passes" }
 nopo-vm = { path = "../nopo-vm" }
 la-arena = "0.3.0"
+reedline = { version = "0.20.0", default-features = false }
 smol_str = "0.2.0"
 thiserror = "1.0.38"

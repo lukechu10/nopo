@@ -133,7 +133,7 @@ impl Visitor for UnifyTypes {
             let binding_ty = binding_ty.generalize();
 
             let pretty = binding_ty.pretty(&self.types_map.items);
-            eprintln!("{:>20}: {pretty}", item.ident);
+            eprintln!(" {}: {pretty}", item.ident);
             self.binding_types_map.insert(binding_id, binding_ty);
         }
     }
