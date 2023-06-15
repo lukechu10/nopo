@@ -54,6 +54,13 @@ pub enum Instr {
         /// How many args.
         args: VmIndex,
     },
+    /// Calls a global directly with `args` number of arguments.
+    CallGlobal {
+        /// Global index of function to call.
+        idx: VmIndex,
+        /// How many args.
+        args: VmIndex,
+    },
     /// Make a new closure.
     MakeClosure {
         /// How many args.

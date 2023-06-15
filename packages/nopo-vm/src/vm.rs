@@ -8,6 +8,8 @@ pub struct CallFrame {
     ip: usize,
     /// Index of the start of the call frame in the stack.
     frame_pointer: usize,
+    /// Whether this function was called using calli or callglobal.
+    is_call_global: bool,
     closure: Rc<ObjClosure>,
 }
 
@@ -23,6 +25,7 @@ impl Vm {
         let frame = CallFrame {
             ip: 0,
             frame_pointer: 0,
+            is_call_global: false,
             closure: Rc::new(closure),
         };
         Self {
@@ -61,7 +64,11 @@ impl Vm {
         // TODO: close upvalues.
 
         // Cleanup locals created inside function.
-        self.stack.truncate(frame.frame_pointer - 1);
+        if frame.is_call_global {
+            self.stack.truncate(frame.frame_pointer);
+        } else {
+            self.stack.truncate(frame.frame_pointer - 1);
+        }
         self.stack.push(ret_value);
     }
 
@@ -136,6 +143,29 @@ impl Vm {
                         self.call_stack.push(CallFrame {
                             ip: 0,
                             frame_pointer: self.stack.len() - callee_arity as usize,
+                            is_call_global: false,
+                            closure,
+                        });
+                    } else {
+                        todo!("call closure first then call result with remaining args");
+                    }
+
+                    // Skip ip increment.
+                    continue;
+                }
+                Instr::CallGlobal { idx, args } => {
+                    *self.ip_mut() += 1;
+                    let callee = &self.stack[idx as usize];
+                    let closure = callee.as_object().unwrap().as_closure().unwrap();
+                    let callee_arity = closure.func.arity;
+                    if callee_arity < args {
+                        // Generate a lambda on the fly.
+                        todo!("partial application");
+                    } else if callee_arity == args {
+                        self.call_stack.push(CallFrame {
+                            ip: 0,
+                            frame_pointer: self.stack.len() - callee_arity as usize,
+                            is_call_global: true,
                             closure,
                         });
                     } else {

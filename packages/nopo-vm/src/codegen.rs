@@ -153,13 +153,37 @@ impl Visitor for Codegen {
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::FnCall => {
                 let (callee, args) = get_fn_call_callee_and_args(expr);
                 assert!(!args.is_empty());
-                self.visit_expr(callee);
+                // See if we can emit a callglobal instead of a calli for performance.
+                let global_idx = if let Expr::Ident(ident_expr) = &**callee {
+                    let binding = self.bindings_map.idents[&*ident_expr].unwrap();
+                    let let_item = self.offset_map[binding];
+                    if matches!(
+                        let_item.kind,
+                        BindingKind::Global | BindingKind::GlobalDataConstructor
+                    ) {
+                        Some(let_item.offset)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if global_idx.is_none() {
+                    self.visit_expr(callee);
+                }
                 for arg in &args {
                     self.visit_expr(arg);
                 }
-                self.chunk().write(Calli {
-                    args: args.len() as u32,
-                });
+                if let Some(idx) = global_idx {
+                    self.chunk().write(CallGlobal {
+                        idx,
+                        args: args.len() as u32,
+                    });
+                } else {
+                    self.chunk().write(Calli {
+                        args: args.len() as u32,
+                    });
+                }
             }
             Expr::Binary(bin_expr) => {
                 // TODO: support ad-hoc polymorphism for binary operators.

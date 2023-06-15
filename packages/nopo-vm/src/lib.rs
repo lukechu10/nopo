@@ -14,7 +14,6 @@ pub fn compile_and_run(root: &Root, unify: UnifyTypes) {
     codegen.visit_root(root);
 
     let closure = codegen.root_closure();
-    dbg!(&closure);
 
     let mut vm = Vm::new(closure);
     vm.run();
