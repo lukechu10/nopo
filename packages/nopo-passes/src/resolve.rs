@@ -711,8 +711,17 @@ pub struct Binding {
     pub ident: Ident,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ResolvedBinding {
     Ok(BindingId),
     Err,
+}
+
+impl ResolvedBinding {
+    pub fn unwrap(self) -> BindingId {
+        match self {
+            ResolvedBinding::Ok(id) => id,
+            ResolvedBinding::Err => panic!("unwrapping an errored resolved binding")
+        }
+    }
 }

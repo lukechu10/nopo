@@ -246,6 +246,7 @@ name = "nopo-vm"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "la-arena",
  "nopo-diagnostics",
  "nopo-parser",
  "nopo-passes",

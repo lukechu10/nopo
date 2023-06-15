@@ -27,23 +27,6 @@ pub enum CompileError {
     CircularModDeclarations,
 }
 
-/// The main entry point for compiling nopo source code.
-///
-/// # Params
-/// * `entry` - The path to the entry point file.
-pub fn compile(entry: &Path) -> Result<(), CompileError> {
-    let diagnostics = Diagnostics::default();
-    let parse_result = parse_files_recursive(entry, diagnostics.clone())?;
-    if !diagnostics.eprint(&parse_result.file_id_map) {
-        return Ok(());
-    }
-    parse_result.check(diagnostics.clone());
-    if !diagnostics.eprint(&parse_result.file_id_map) {
-        return Ok(());
-    }
-    Ok(())
-}
-
 /// A file that has been parsed.
 #[derive(Debug)]
 pub struct ParsedFile {
@@ -212,13 +195,6 @@ pub fn parse_files_recursive(
         file_id_map,
         entry_file_id: entry_file_id.expect("should have an entry file"),
     })
-}
-
-impl ParseResult {
-    pub fn check(&self, diagnostics: Diagnostics) -> CheckResult {
-        run_resolution_passes(self.get_entry_root(), diagnostics);
-        CheckResult {}
-    }
 }
 
 pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) -> Option<UnifyTypes> {

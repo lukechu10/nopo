@@ -41,18 +41,31 @@ pub enum Instr {
     LoadLocal(VmIndex),
     /// Load a global variable (absolute index in stack).
     LoadGlobal(VmIndex),
+    /// Load an upvalue.
+    LoadUpValue(VmIndex),
     /// Jump to the relative index in the current calling frame.
     Jump(VmIndex),
     /// Branched jump to the relative index in the current calling frame, if and only if the top
     /// value of the stack is `true`. Pops the top of the stack.
     CJump(VmIndex),
-    /// Call the function that is at the top of the stack.
+    /// Calls a function with `args` number of arguments. The function should be below all the
+    /// arguments.
     Calli {
         /// How many args.
         args: VmIndex,
     },
     /// Make a new closure.
     MakeClosure {
+        /// How many args.
+        args: VmIndex,
+    },
+    MakeTuple {
+        /// How many args.
+        args: VmIndex,
+    },
+    MakeAdt {
+        /// Tag of the ADT.
+        tag: VmIndex,
         /// How many args.
         args: VmIndex,
     },
@@ -76,6 +89,11 @@ pub enum Instr {
     /// Rotate int right.
     IntRor,
 
+    IntLt,
+    IntGt,
+    IntLte,
+    IntGte,
+
     BoolNot,
     BoolAnd,
     BoolOr,
@@ -86,6 +104,8 @@ pub enum Instr {
 
     /// Pop a value of the stack and discard it.
     Pop,
+    /// Pops the top value. Then pops index number of values. Finally pushes the top value back on.
+    Slide(VmIndex),
 }
 
 /// A block of bytecode.
@@ -199,8 +219,51 @@ pub enum UpValue {
 pub enum Object {
     String(String),
     Tuple(Vec<Value>),
+    Adt(VmIndex, Vec<Value>),
     Fn(ObjProto),
-    Closure(ObjClosure),
+    Closure(Rc<ObjClosure>),
+}
+
+impl Object {
+    pub fn as_string(&self) -> Option<&String> {
+        if let Self::String(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_tuple(&self) -> Option<&Vec<Value>> {
+        if let Self::Tuple(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_adt(&self) -> Option<(&VmIndex, &Vec<Value>)> {
+        if let Self::Adt(idx, values) = self {
+            Some((idx, values))
+        } else {
+            None
+        }
+    }
+
+    pub fn as_fn(&self) -> Option<&ObjProto> {
+        if let Self::Fn(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_closure(&self) -> Option<Rc<ObjClosure>> {
+        if let Self::Closure(v) = self {
+            Some(v.clone())
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
