@@ -9,3 +9,4 @@ la-arena = "0.3.0"
 nopo-diagnostics = { path = "../nopo-diagnostics" }
 nopo-parser = { path = "../nopo-parser" }
 nopo-passes = { path = "../nopo-passes" }
+yansi = "0.5.1"

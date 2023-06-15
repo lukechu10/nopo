@@ -11,6 +11,7 @@ use nopo_parser::visitor::{walk_root, Visitor};
 use nopo_passes::resolve::{BindingId, BindingsMap, ResolvedType, TypesMap};
 use nopo_passes::unify::UnifyTypes;
 
+use crate::print::print_chunk;
 use crate::types::Instr::*;
 use crate::types::{Chunk, ObjClosure, ObjProto, Object, Value};
 
@@ -70,7 +71,9 @@ impl Codegen {
     }
 
     fn pop_chunk(&mut self) -> Chunk {
-        self.chunks.pop().unwrap().chunk
+        let chunk = self.chunks.pop().unwrap().chunk;
+        print_chunk(&chunk, &mut std::io::stderr()).unwrap(); // TODO: remove this.
+        chunk
     }
 
     fn new_binding_offset(&mut self, id: BindingId, kind: BindingKind) {
@@ -80,11 +83,11 @@ impl Codegen {
         self.offset_map.insert(id, binding_data);
     }
 
-    pub fn root_closure(self) -> ObjClosure {
+    pub fn root_closure(mut self) -> ObjClosure {
         assert_eq!(self.chunks.len(), 1);
         ObjClosure {
             func: ObjProto {
-                chunk: self.chunks.into_iter().next().unwrap().chunk,
+                chunk: self.pop_chunk(),
                 arity: 0,
                 upvalues_count: 0,
             },
@@ -146,7 +149,27 @@ impl Visitor for Codegen {
                 }
             }
             Expr::Block(_) => todo!(),
-            Expr::Lambda(_) => todo!(),
+            Expr::Lambda(lambda_expr) => {
+                let arity = lambda_expr.params.len();
+
+                self.new_chunk("<lambda>".to_string());
+                for param in &lambda_expr.params {
+                    let binding = self.bindings_map.lambda_params[&*param];
+                    self.new_binding_offset(binding, BindingKind::Local);
+                }
+                self.visit_expr(&lambda_expr.expr);
+                let chunk = self.pop_chunk();
+                let value = Value::Object(Rc::new(Object::Closure(Rc::new(ObjClosure {
+                    func: ObjProto {
+                        arity: arity as u32,
+                        chunk,
+                        upvalues_count: 0,
+                    },
+                    upvalues: Vec::new(), // TODO: get upvalues.
+                }))));
+                let slot = self.chunk().write_const(value);
+                self.chunk().write(LoadConst(slot));
+            }
             Expr::Tuple(_) => todo!(),
             Expr::Record(_) => todo!(),
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => todo!("dot expr"),

@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::fmt;
 use std::rc::Rc;
 
 pub type VmIndex = u32;
@@ -7,7 +7,7 @@ pub type VmInt = i64;
 pub type VmChar = char;
 
 #[derive(Debug, Clone, Copy)]
-pub struct VmFloat(f64);
+pub struct VmFloat(pub f64);
 impl From<f64> for VmFloat {
     fn from(value: f64) -> Self {
         Self(value)
@@ -24,6 +24,11 @@ impl PartialEq for VmFloat {
     }
 }
 impl Eq for VmFloat {}
+impl fmt::Display for VmFloat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Instr {
@@ -212,6 +217,34 @@ impl Value {
             Some(v)
         } else {
             None
+        }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Bool(value) => value.fmt(f),
+            Value::Int(value) => value.fmt(f),
+            Value::Float(value) => value.0.fmt(f),
+            Value::Char(value) => value.fmt(f),
+            Value::Object(obj) => match obj.as_ref() {
+                Object::String(value) => value.fmt(f),
+                Object::Tuple(values) => {
+                    write!(f, "(")?;
+                    if let Some(first) = values.first() {
+                        write!(f, "{first}")?;
+                    }
+                    for value in values.iter().skip(1) {
+                        write!(f, ", {value}")?;
+                    }
+                    write!(f, ")")?;
+                    Ok(())
+                }
+                Object::Adt(_, _) => todo!(),
+                Object::Fn(_) => unreachable!(),
+                Object::Closure(closure) => write!(f, "<closure {}>", closure.func.chunk.name),
+            },
         }
     }
 }

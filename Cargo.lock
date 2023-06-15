@@ -250,6 +250,7 @@ dependencies = [
  "nopo-diagnostics",
  "nopo-parser",
  "nopo-passes",
+ "yansi",
 ]
 
 [[package]]
