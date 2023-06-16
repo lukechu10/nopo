@@ -2,7 +2,6 @@ use codegen::Codegen;
 use nopo_parser::ast::Root;
 use nopo_parser::visitor::Visitor;
 use nopo_passes::unify::UnifyTypes;
-use print::print_chunk;
 
 use crate::vm::Vm;
 

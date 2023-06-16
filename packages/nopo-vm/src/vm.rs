@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::types::{Instr, ObjClosure, Object, UpValue, Value, ValueArray};
+use crate::print::print_chunk;
+use crate::types::{Chunk, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray};
 
 #[derive(Debug)]
 pub struct CallFrame {
@@ -91,7 +92,135 @@ impl Vm {
         }
     }
 
+    fn calli(&mut self, args: u32) {
+        let callee = &self.stack[self.stack.len() - args as usize - 1];
+        let closure = callee.as_object().unwrap().as_closure().unwrap();
+        let callee_arity = closure.proto.arity;
+        if callee_arity > args {
+            // Generate a lambda on the fly. Capture all arguments as upvalues. Capture the
+            // original closure as the lambda_arity-th upvalue.
+            let mut chunk = Chunk::new("<partial>".to_string());
+            let mut upvalues = (0..args)
+                .map(|_| self.pop())
+                .map(|x| Rc::new(RefCell::new(UpValue::Closed(x))))
+                .collect::<Vec<_>>();
+            upvalues.push(Rc::new(RefCell::new(UpValue::Closed(self.pop())))); // This should be the closure.
+            let lambda_arity = callee_arity - args;
+            chunk.write(Instr::LoadUpValue(lambda_arity));
+            for i in 0..args {
+                chunk.write(Instr::LoadUpValue(i));
+            }
+            for i in 0..lambda_arity {
+                chunk.write(Instr::LoadLocal(i));
+            }
+            chunk.write(Instr::Calli { args: callee_arity });
+            print_chunk(&chunk, &mut std::io::stderr()).unwrap();
+            let closure = ObjClosure {
+                proto: ObjProto {
+                    chunk: Rc::new(chunk),
+                    arity: lambda_arity,
+                    upvalues_count: args,
+                },
+                upvalues,
+            };
+            self.stack
+                .push(Value::Object(Rc::new(Object::Closure(Rc::new(closure)))));
+        } else if callee_arity == args {
+            self.call_stack.push(CallFrame {
+                ip: 0,
+                frame_pointer: self.stack.len() - callee_arity as usize,
+                is_call_global: true,
+                closure,
+            });
+        } else {
+            // Call first with callee_args number of args. Then call that expression
+            // again with remaining args.
+            let extra_arity = args - callee_arity;
+            let extra = (0..extra_arity).map(|_| self.pop()).collect::<Vec<_>>();
+            // Get the new closure on the top of the stack.
+            // We need to run this new frame to completion to get the value of the closre.
+            self.calli(callee_arity);
+            self.run_frame();
+
+            for value in extra {
+                self.stack.push(value);
+            }
+            self.calli(extra_arity);
+        }
+    }
+    fn call_global(&mut self, idx: u32, args: u32) {
+        let callee = &self.stack[idx as usize];
+        let closure = callee.as_object().unwrap().as_closure().unwrap();
+        let callee_arity = closure.proto.arity;
+        if callee_arity > args {
+            // Generate a lambda on the fly. Capture all arguments as upvalues.
+            let mut chunk = Chunk::new("<partial>".to_string());
+            let upvalues = (0..args)
+                .map(|_| self.pop())
+                .map(|x| Rc::new(RefCell::new(UpValue::Closed(x))))
+                .collect::<Vec<_>>();
+            let lambda_arity = callee_arity - args;
+            for i in 0..args {
+                chunk.write(Instr::LoadUpValue(i));
+            }
+            for i in 0..lambda_arity {
+                chunk.write(Instr::LoadLocal(i));
+            }
+            chunk.write(Instr::CallGlobal {
+                idx,
+                args: callee_arity,
+            });
+            print_chunk(&chunk, &mut std::io::stderr()).unwrap();
+            let closure = ObjClosure {
+                proto: ObjProto {
+                    chunk: Rc::new(chunk),
+                    arity: lambda_arity,
+                    upvalues_count: args,
+                },
+                upvalues,
+            };
+            self.stack
+                .push(Value::Object(Rc::new(Object::Closure(Rc::new(closure)))));
+        } else if callee_arity == args {
+            self.call_stack.push(CallFrame {
+                ip: 0,
+                frame_pointer: self.stack.len() - callee_arity as usize,
+                is_call_global: true,
+                closure,
+            });
+        } else {
+            // Call first with callee_args number of args. Then call that expression
+            // again with remaining args.
+            let extra_arity = args - callee_arity;
+            let extra = (0..extra_arity).map(|_| self.pop()).collect::<Vec<_>>();
+            // Get the new closure on the top of the stack.
+            // We need to run this new frame to completion to get the value of the closre.
+            self.call_global(idx, callee_arity);
+            self.run_frame();
+
+            for value in extra {
+                self.stack.push(value);
+            }
+            self.calli(extra_arity);
+        }
+    }
+
     pub fn run(&mut self) {
+        loop {
+            self.run_frame();
+            if self.call_stack.len() == 1 {
+                // We have reached the end of the program.
+                return;
+            } else {
+                // Return from a function.
+                self.cleanup_function();
+                continue;
+            }
+        }
+    }
+
+    /// Runs the interpreter loop until the end of the call frame has been reached.
+    fn run_frame(&mut self) {
         macro_rules! gen_int_op {
             ($op:tt) => {{
                 let rhs = self.pop();
@@ -115,18 +244,7 @@ impl Vm {
             }};
         }
 
-        loop {
-            if self.ip() >= self.code().len() {
-                if self.call_stack.len() == 1 {
-                    // We have reached the end of the program.
-                    return;
-                } else {
-                    // Return from a function.
-                    self.cleanup_function();
-                    continue;
-                }
-            }
-
+        while self.ip() < self.code().len() {
             let instr = self.code()[self.ip()];
             match instr {
                 Instr::LoadBool(value) => self.stack.push(Value::Bool(value)),
@@ -156,51 +274,19 @@ impl Vm {
                 }
                 Instr::Calli { args } => {
                     *self.ip_mut() += 1;
-                    let callee = &self.stack[self.stack.len() - args as usize - 1];
-                    let closure = callee.as_object().unwrap().as_closure().unwrap();
-                    let callee_arity = closure.proto.arity;
-                    if callee_arity < args {
-                        // Generate a lambda on the fly.
-                        todo!("partial application");
-                    } else if callee_arity == args {
-                        self.call_stack.push(CallFrame {
-                            ip: 0,
-                            frame_pointer: self.stack.len() - callee_arity as usize,
-                            is_call_global: false,
-                            closure,
-                        });
-                    } else {
-                        todo!("call closure first then call result with remaining args");
-                    }
-
+                    self.calli(args);
                     // Skip ip increment.
                     continue;
                 }
                 Instr::CallGlobal { idx, args } => {
                     *self.ip_mut() += 1;
-                    let callee = &self.stack[idx as usize];
-                    let closure = callee.as_object().unwrap().as_closure().unwrap();
-                    let callee_arity = closure.proto.arity;
-                    if callee_arity < args {
-                        // Generate a lambda on the fly.
-                        todo!("partial application");
-                    } else if callee_arity == args {
-                        self.call_stack.push(CallFrame {
-                            ip: 0,
-                            frame_pointer: self.stack.len() - callee_arity as usize,
-                            is_call_global: true,
-                            closure,
-                        });
-                    } else {
-                        todo!("call closure first then call result with remaining args");
-                    }
-
+                    self.call_global(idx, args);
                     // Skip ip increment.
                     continue;
                 }
                 Instr::MakeClosure { idx, upvalues } => {
                     // TODO: use open upvalues.
-                    let mut upvalues = (0..upvalues)
+                    let upvalues = (0..upvalues)
                         .map(|_| Rc::new(RefCell::new(UpValue::Closed(self.pop()))))
                         .collect::<Vec<_>>();
                     let proto = self.frame().closure.proto.chunk.consts[idx as usize]
@@ -217,9 +303,26 @@ impl Vm {
                             },
                         )))));
                 }
-                Instr::MakeTuple { args } => todo!(),
-                Instr::MakeAdt { tag, args } => todo!(),
-                Instr::GetField(_) => todo!(),
+                Instr::MakeTuple { args } => {
+                    let values = (0..args).map(|_| self.pop()).collect::<Vec<_>>();
+                    self.stack
+                        .push(Value::Object(Rc::new(Object::Tuple(values))));
+                }
+                Instr::MakeAdt { tag, args } => {
+                    let values = (0..args).map(|_| self.pop()).collect::<Vec<_>>();
+                    self.stack
+                        .push(Value::Object(Rc::new(Object::Adt(tag, values))));
+                }
+                Instr::GetField(idx) => {
+                    let value = self.pop();
+                    let field = match &**value.as_object().unwrap() {
+                        Object::Tuple(values) | Object::Adt(_, values) => {
+                            values.into_iter().nth(idx as usize).unwrap()
+                        }
+                        _ => unreachable!(),
+                    };
+                    self.stack.push(field.clone())
+                }
                 Instr::IntAdd => gen_int_op!(+),
                 Instr::IntSub => gen_int_op!(-),
                 Instr::IntMul => gen_int_op!(*),

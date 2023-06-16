@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use la_arena::ArenaMap;
 use nopo_diagnostics::span::Spanned;
-use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeId, TypeItem};
+use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
 use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_root, Visitor};
 use nopo_passes::resolve::{BindingId, BindingsMap, ResolvedType, TypesMap};
@@ -13,7 +13,7 @@ use nopo_passes::unify::UnifyTypes;
 
 use crate::print::print_chunk;
 use crate::types::Instr::{self, *};
-use crate::types::{Chunk, ObjClosure, ObjProto, Object, Value};
+use crate::types::{Chunk, ObjClosure, ObjProto, Object, Value, VmIndex};
 
 #[derive(Debug)]
 pub struct Codegen {
@@ -47,7 +47,7 @@ struct BindingOffset {
 #[derive(Debug, Clone, Copy)]
 enum BindingKind {
     Global,
-    GlobalDataConstructor,
+    GlobalDataConstructor { tag: VmIndex, arity: VmIndex },
     Local,
 }
 
@@ -86,6 +86,7 @@ impl Codegen {
         data
     }
 
+    /// Insert a new entry into the offset map.
     fn new_binding_offset(&mut self, id: BindingId, kind: BindingKind) {
         let offset = self.chunks.last_mut().unwrap().next_offset;
         let binding_data = BindingOffset {
@@ -149,7 +150,44 @@ impl Visitor for Codegen {
         walk_root(self, root);
     }
 
-    fn visit_type_item(&mut self, _idx: TypeId, item: &Spanned<TypeItem>) {}
+    fn visit_type_item(&mut self, _idx: TypeId, item: &Spanned<TypeItem>) {
+        match &*item.def {
+            TypeDef::Adt(adt) => {
+                for (tag, data_constructor) in adt.data_constructors.iter().enumerate() {
+                    let binding = self.bindings_map.data_constructors[&data_constructor];
+                    // Create a lambda that calls the data constructor.
+                    self.new_chunk(data_constructor.ident.to_string());
+                    for i in (0..data_constructor.of.len()).rev() {
+                        self.chunk().write(LoadLocal(i as u32));
+                    }
+                    self.chunk().write(MakeAdt {
+                        tag: tag as u32,
+                        args: data_constructor.of.len() as u32,
+                    });
+                    let chunk = self.pop_chunk();
+                    let value = Value::Object(Rc::new(Object::Closure(Rc::new(ObjClosure {
+                        proto: ObjProto {
+                            arity: data_constructor.of.len() as u32,
+                            chunk,
+                            upvalues_count: 0,
+                        },
+                        upvalues: Vec::new(),
+                    }))));
+                    let slot = self.chunk().write_const(value);
+                    self.chunk().write(LoadConst(slot));
+                    self.new_binding_offset(
+                        binding,
+                        BindingKind::GlobalDataConstructor {
+                            tag: tag as u32,
+                            arity: data_constructor.of.len() as u32,
+                        },
+                    );
+                }
+            }
+            TypeDef::Record(_) => {}
+            TypeDef::Err => unreachable!(),
+        }
+    }
 
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
         let binding = self.bindings_map.let_items[item];
@@ -189,8 +227,12 @@ impl Visitor for Codegen {
                 let binding = self.bindings_map.idents[&*ident_expr].unwrap();
                 let data = self.offset_map[binding];
                 match data.kind {
-                    BindingKind::Global => self.chunk().write(LoadGlobal(data.offset)),
-                    BindingKind::GlobalDataConstructor => todo!(),
+                    BindingKind::GlobalDataConstructor { tag, arity } if arity == 0 => {
+                        self.chunk().write(MakeAdt { tag, args: 0 })
+                    }
+                    BindingKind::Global | BindingKind::GlobalDataConstructor { .. } => {
+                        self.chunk().write(LoadGlobal(data.offset))
+                    }
                     BindingKind::Local => {
                         if data.chunks_depth == self.chunks.len() - 1 {
                             self.chunk().write(LoadLocal(data.offset));
@@ -228,42 +270,60 @@ impl Visitor for Codegen {
                     upvalues: data.upvalues.len() as u32,
                 });
             }
-            Expr::Tuple(_) => todo!(),
+            Expr::Tuple(tuple_expr) => {
+                for expr in tuple_expr.elements.iter().rev() {
+                    self.visit_expr(expr);
+                }
+                self.chunk().write(Instr::MakeTuple {
+                    args: tuple_expr.elements.len() as u32,
+                });
+            }
             Expr::Record(_) => todo!(),
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => todo!("dot expr"),
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::FnCall => {
                 let (callee, args) = get_fn_call_callee_and_args(expr);
                 assert!(!args.is_empty());
-                // See if we can emit a callglobal instead of a calli for performance.
-                let global_idx = if let Expr::Ident(ident_expr) = &**callee {
+
+                let data = if let Expr::Ident(ident_expr) = &**callee {
                     let binding = self.bindings_map.idents[&*ident_expr].unwrap();
-                    let let_item = self.offset_map[binding];
-                    if matches!(
-                        let_item.kind,
-                        BindingKind::Global | BindingKind::GlobalDataConstructor
-                    ) {
-                        Some(let_item.offset)
-                    } else {
-                        None
-                    }
+                    Some(self.offset_map[binding])
                 } else {
                     None
                 };
-                if global_idx.is_none() {
-                    self.visit_expr(callee);
+                match data.map(|data| data.kind) {
+                    Some(BindingKind::Global) => {}
+                    Some(BindingKind::GlobalDataConstructor { arity, .. })
+                        if arity == args.len() as u32 => {}
+                    _ => {
+                        self.visit_expr(callee);
+                    }
                 }
                 for arg in &args {
                     self.visit_expr(arg);
                 }
-                if let Some(idx) = global_idx {
-                    self.chunk().write(CallGlobal {
-                        idx,
-                        args: args.len() as u32,
-                    });
-                } else {
-                    self.chunk().write(Calli {
-                        args: args.len() as u32,
-                    });
+                match data {
+                    Some(BindingOffset {
+                        kind: BindingKind::Global,
+                        offset,
+                        ..
+                    }) => {
+                        self.chunk().write(CallGlobal {
+                            idx: offset,
+                            args: args.len() as u32,
+                        });
+                    }
+                    Some(BindingOffset {
+                        kind: BindingKind::GlobalDataConstructor { tag, arity },
+                        offset: _,
+                        ..
+                    }) if arity == args.len() as u32 => {
+                        self.chunk().write(MakeAdt { tag, args: arity });
+                    }
+                    _ => {
+                        self.chunk().write(Calli {
+                            args: args.len() as u32,
+                        });
+                    }
                 }
             }
             Expr::Binary(bin_expr) => {

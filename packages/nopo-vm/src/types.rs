@@ -84,8 +84,8 @@ pub enum Instr {
         /// How many args.
         args: VmIndex,
     },
-    /// Get a field of a tuple that is at the top of the stack. Replaces the top of the stack with
-    /// the value of the field.
+    /// Get a field of a tuple or adt is at the top of the stack. Replaces the top of the stack
+    /// with the value of the field.
     GetField(VmIndex),
 
     IntAdd,
@@ -234,7 +234,8 @@ impl fmt::Display for Value {
             Value::Object(obj) => match obj.as_ref() {
                 Object::String(value) => value.fmt(f),
                 Object::Tuple(values) => {
-                    write!(f, "(")?;
+                    // FIXME: type-aware printing.
+                    write!(f, "<tuple> (")?;
                     if let Some(first) = values.first() {
                         write!(f, "{first}")?;
                     }
@@ -244,7 +245,18 @@ impl fmt::Display for Value {
                     write!(f, ")")?;
                     Ok(())
                 }
-                Object::Adt(_, _) => todo!(),
+                Object::Adt(tag, values) => {
+                    // FIXME: type-aware printing.
+                    write!(f, "<adt tag={tag}> (")?;
+                    if let Some(first) = values.first() {
+                        write!(f, "{first}")?;
+                    }
+                    for value in values.iter().skip(1) {
+                        write!(f, ", {value}")?;
+                    }
+                    write!(f, ")")?;
+                    Ok(())
+                }
                 Object::Proto(proto) => write!(f, "<proto {}>", proto.chunk.name),
                 Object::Closure(closure) => write!(f, "<closure {}>", closure.proto.chunk.name),
             },
