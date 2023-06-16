@@ -10,11 +10,11 @@ pub fn print_chunk(chunk: &Chunk, f: &mut dyn io::Write) -> io::Result<()> {
     writeln!(f, "== {} ==", chunk.name)?;
     writeln!(f, "== CODE")?;
     for (offset, instr) in chunk.code.iter().enumerate() {
-        writeln!(f, "{:>5} {instr}", Paint::rgb(150, 150, 150, offset))?;
+        writeln!(f, "{:>4} {instr}", Paint::rgb(150, 150, 150, offset))?;
     }
     writeln!(f, "== CONSTS")?;
     for (idx, value) in chunk.consts.iter().enumerate() {
-        writeln!(f, "{:>5} {value}", Paint::rgb(150, 150, 150, idx))?;
+        writeln!(f, "{:>4} {value}", Paint::rgb(150, 150, 150, idx))?;
     }
     writeln!(f, "")?;
     Ok(())
@@ -37,7 +37,11 @@ impl fmt::Display for Instr {
             Instr::CallGlobal { idx, args } => {
                 write!(f, "{:<15} args: {args}, idx: {idx}", "call.global")
             }
-            Instr::MakeClosure { args } => write!(f, "{:<15} args: {args}", "make.closure"),
+            Instr::MakeClosure { idx, upvalues } => write!(
+                f,
+                "{:<15} args: {idx}, upvalues: {upvalues}",
+                "make.closure"
+            ),
             Instr::MakeTuple { args } => write!(f, "{:<15} args: {args}", "make.tuple"),
             Instr::MakeAdt { tag, args } => {
                 write!(f, "{:<15} tag: {tag}, args: {args}", "make.adt")

@@ -1,6 +1,7 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::types::{Instr, ObjClosure, UpValue, Value, ValueArray};
+use crate::types::{Instr, ObjClosure, Object, UpValue, Value, ValueArray};
 
 #[derive(Debug)]
 pub struct CallFrame {
@@ -17,7 +18,7 @@ pub struct CallFrame {
 pub struct Vm {
     pub stack: ValueArray,
     call_stack: Vec<CallFrame>,
-    upvalues: Vec<UpValue>,
+    upvalues: Vec<Rc<RefCell<UpValue>>>,
 }
 
 impl Vm {
@@ -50,7 +51,7 @@ impl Vm {
     }
 
     fn code(&self) -> &[Instr] {
-        &self.frame().closure.func.chunk.code
+        &self.frame().closure.proto.chunk.code
     }
 
     fn pop(&mut self) -> Value {
@@ -61,7 +62,9 @@ impl Vm {
         let ret_value = self.pop();
         let frame = self.call_stack.pop().unwrap();
 
-        // TODO: close upvalues.
+        for idx in frame.frame_pointer..self.stack.len() {
+            self.close_upvalues(idx);
+        }
 
         // Cleanup locals created inside function.
         if frame.is_call_global {
@@ -70,6 +73,22 @@ impl Vm {
             self.stack.truncate(frame.frame_pointer - 1);
         }
         self.stack.push(ret_value);
+    }
+
+    fn resolve_upvalue_into_value(&self, upvalue: &UpValue) -> Value {
+        match upvalue {
+            UpValue::Open(idx) => self.stack[*idx as usize].clone(),
+            UpValue::Closed(value) => value.clone(),
+        }
+    }
+
+    fn close_upvalues(&self, idx: usize) {
+        let value = &self.stack[idx];
+        for upvalue in &self.upvalues {
+            if upvalue.borrow().is_open_upvalue_with_idx(idx as u32) {
+                upvalue.replace(UpValue::Closed(value.clone()));
+            }
+        }
     }
 
     pub fn run(&mut self) {
@@ -116,12 +135,16 @@ impl Vm {
                 Instr::LoadChar(value) => self.stack.push(Value::Char(value)),
                 Instr::LoadConst(idx) => self
                     .stack
-                    .push(self.frame().closure.func.chunk.consts[idx as usize].clone()),
+                    .push(self.frame().closure.proto.chunk.consts[idx as usize].clone()),
                 Instr::LoadLocal(offset) => self
                     .stack
                     .push(self.stack[offset as usize + self.frame().frame_pointer].clone()),
                 Instr::LoadGlobal(idx) => self.stack.push(self.stack[idx as usize].clone()),
-                Instr::LoadUpValue(idx) => todo!(),
+                Instr::LoadUpValue(idx) => {
+                    let upvalue = self.frame().closure.upvalues[idx as usize].clone();
+                    let value = self.resolve_upvalue_into_value(&upvalue.borrow());
+                    self.stack.push(value);
+                }
                 Instr::Jump(distance) => {
                     *self.ip_mut() += distance as usize;
                 }
@@ -135,7 +158,7 @@ impl Vm {
                     *self.ip_mut() += 1;
                     let callee = &self.stack[self.stack.len() - args as usize - 1];
                     let closure = callee.as_object().unwrap().as_closure().unwrap();
-                    let callee_arity = closure.func.arity;
+                    let callee_arity = closure.proto.arity;
                     if callee_arity < args {
                         // Generate a lambda on the fly.
                         todo!("partial application");
@@ -157,7 +180,7 @@ impl Vm {
                     *self.ip_mut() += 1;
                     let callee = &self.stack[idx as usize];
                     let closure = callee.as_object().unwrap().as_closure().unwrap();
-                    let callee_arity = closure.func.arity;
+                    let callee_arity = closure.proto.arity;
                     if callee_arity < args {
                         // Generate a lambda on the fly.
                         todo!("partial application");
@@ -175,7 +198,25 @@ impl Vm {
                     // Skip ip increment.
                     continue;
                 }
-                Instr::MakeClosure { args } => todo!(),
+                Instr::MakeClosure { idx, upvalues } => {
+                    // TODO: use open upvalues.
+                    let mut upvalues = (0..upvalues)
+                        .map(|_| Rc::new(RefCell::new(UpValue::Closed(self.pop()))))
+                        .collect::<Vec<_>>();
+                    let proto = self.frame().closure.proto.chunk.consts[idx as usize]
+                        .as_object()
+                        .unwrap()
+                        .as_proto()
+                        .unwrap()
+                        .clone();
+                    self.stack
+                        .push(Value::Object(Rc::new(Object::Closure(Rc::new(
+                            ObjClosure {
+                                proto: proto.clone(),
+                                upvalues,
+                            },
+                        )))));
+                }
                 Instr::MakeTuple { args } => todo!(),
                 Instr::MakeAdt { tag, args } => todo!(),
                 Instr::GetField(_) => todo!(),

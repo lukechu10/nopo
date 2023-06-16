@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -68,8 +69,10 @@ pub enum Instr {
     },
     /// Make a new closure.
     MakeClosure {
-        /// How many args.
-        args: VmIndex,
+        /// Index of proto object in constants table.
+        idx: VmIndex,
+        /// How many upvalues.
+        upvalues: VmIndex,
     },
     MakeTuple {
         /// How many args.
@@ -242,17 +245,26 @@ impl fmt::Display for Value {
                     Ok(())
                 }
                 Object::Adt(_, _) => todo!(),
-                Object::Fn(_) => unreachable!(),
-                Object::Closure(closure) => write!(f, "<closure {}>", closure.func.chunk.name),
+                Object::Proto(proto) => write!(f, "<proto {}>", proto.chunk.name),
+                Object::Closure(closure) => write!(f, "<closure {}>", closure.proto.chunk.name),
             },
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UpValue {
     Open(VmIndex),
     Closed(Value),
+}
+
+impl UpValue {
+    pub fn is_open_upvalue_with_idx(&self, idx: VmIndex) -> bool {
+        match self {
+            Self::Open(x) => *x == idx,
+            Self::Closed(_) => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -260,7 +272,7 @@ pub enum Object {
     String(String),
     Tuple(Vec<Value>),
     Adt(VmIndex, Vec<Value>),
-    Fn(ObjProto),
+    Proto(ObjProto),
     Closure(Rc<ObjClosure>),
 }
 
@@ -289,8 +301,8 @@ impl Object {
         }
     }
 
-    pub fn as_fn(&self) -> Option<&ObjProto> {
-        if let Self::Fn(v) = self {
+    pub fn as_proto(&self) -> Option<&ObjProto> {
+        if let Self::Proto(v) = self {
             Some(v)
         } else {
             None
@@ -306,19 +318,19 @@ impl Object {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ObjProto {
     /// The number of arguments that this function takes.
     pub arity: VmIndex,
-    pub chunk: Chunk,
+    pub chunk: Rc<Chunk>,
     /// The number of captured upvalues.
     pub upvalues_count: VmIndex,
 }
 
 #[derive(Debug)]
 pub struct ObjClosure {
-    pub func: ObjProto,
-    pub upvalues: Vec<UpValue>,
+    pub proto: ObjProto,
+    pub upvalues: Vec<Rc<RefCell<UpValue>>>,
 }
 
 pub type ValueArray = Vec<Value>;

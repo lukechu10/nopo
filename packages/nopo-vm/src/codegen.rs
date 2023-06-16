@@ -12,7 +12,7 @@ use nopo_passes::resolve::{BindingId, BindingsMap, ResolvedType, TypesMap};
 use nopo_passes::unify::UnifyTypes;
 
 use crate::print::print_chunk;
-use crate::types::Instr::*;
+use crate::types::Instr::{self, *};
 use crate::types::{Chunk, ObjClosure, ObjProto, Object, Value};
 
 #[derive(Debug)]
@@ -30,12 +30,18 @@ struct ChunkWithData {
     chunk: Chunk,
     /// Temporary data storing the next offset for a variable.
     next_offset: u32,
+    /// List of upvalues that should be captured.
+    ///
+    /// Stored as the instructions needed to push the upvalue onto the stack.
+    upvalues: Vec<Instr>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct BindingOffset {
     kind: BindingKind,
     offset: u32,
+    /// chunk.len() when this binding was created.
+    chunks_depth: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +49,6 @@ enum BindingKind {
     Global,
     GlobalDataConstructor,
     Local,
-    LocalUpValue,
 }
 
 impl Codegen {
@@ -67,26 +72,68 @@ impl Codegen {
         self.chunks.push(ChunkWithData {
             chunk: Chunk::new(name),
             next_offset: 0,
+            upvalues: Vec::new(),
         });
     }
 
-    fn pop_chunk(&mut self) -> Chunk {
-        let chunk = self.chunks.pop().unwrap().chunk;
-        print_chunk(&chunk, &mut std::io::stderr()).unwrap(); // TODO: remove this.
-        chunk
+    fn pop_chunk(&mut self) -> Rc<Chunk> {
+        Rc::new(self.pop_chunk_with_data().chunk)
+    }
+
+    fn pop_chunk_with_data(&mut self) -> ChunkWithData {
+        let data = self.chunks.pop().unwrap();
+        print_chunk(&data.chunk, &mut std::io::stderr()).unwrap(); // TODO: remove this.
+        data
     }
 
     fn new_binding_offset(&mut self, id: BindingId, kind: BindingKind) {
         let offset = self.chunks.last_mut().unwrap().next_offset;
-        let binding_data = BindingOffset { kind, offset };
+        let binding_data = BindingOffset {
+            kind,
+            offset,
+            chunks_depth: self.chunks.len() - 1,
+        };
         self.chunks.last_mut().unwrap().next_offset += 1;
         self.offset_map.insert(id, binding_data);
+    }
+
+    /// Threads a binding through a stack of closures and returns the upvalue offset.
+    fn thread_binding_as_upvalue(&mut self, id: BindingId) -> u32 {
+        let offset_data = self.offset_map[id];
+
+        let current_depth = self.chunks.len() - 1;
+        let decl_depth = offset_data.chunks_depth;
+        assert!(current_depth > decl_depth);
+
+        /// Adds an upvalue to a chunk if not already added. Returns the offset of the upvalue.
+        fn add_upvalue_to_chunk(chunk: &mut ChunkWithData, instr: Instr) -> u32 {
+            if let Some(pos) = chunk.upvalues.iter().position(|&x| x == instr) {
+                pos as u32
+            } else {
+                chunk.upvalues.push(instr);
+                (chunk.upvalues.len() - 1) as u32
+            }
+        }
+
+        // Bottom most scope should capture a local variable.
+        let mut offset = add_upvalue_to_chunk(
+            &mut self.chunks[decl_depth + 1],
+            Instr::LoadLocal(offset_data.offset),
+        );
+        // Scopes after that should capture upvalue from previous scope.
+        if decl_depth + 2 < current_depth {
+            for i in decl_depth + 2..current_depth {
+                offset = add_upvalue_to_chunk(&mut self.chunks[i], Instr::LoadUpValue(offset));
+            }
+        }
+
+        offset
     }
 
     pub fn root_closure(mut self) -> ObjClosure {
         assert_eq!(self.chunks.len(), 1);
         ObjClosure {
-            func: ObjProto {
+            proto: ObjProto {
                 chunk: self.pop_chunk(),
                 arity: 0,
                 upvalues_count: 0,
@@ -123,7 +170,7 @@ impl Visitor for Codegen {
                 self.visit_expr(&item.expr);
                 let chunk = self.pop_chunk();
                 let value = Value::Object(Rc::new(Object::Closure(Rc::new(ObjClosure {
-                    func: ObjProto {
+                    proto: ObjProto {
                         arity: arity as u32,
                         chunk,
                         upvalues_count: 0, // Because this is a top-level function.
@@ -144,8 +191,14 @@ impl Visitor for Codegen {
                 match data.kind {
                     BindingKind::Global => self.chunk().write(LoadGlobal(data.offset)),
                     BindingKind::GlobalDataConstructor => todo!(),
-                    BindingKind::Local => self.chunk().write(LoadLocal(data.offset)),
-                    BindingKind::LocalUpValue => self.chunk().write(LoadUpValue(data.offset)),
+                    BindingKind::Local => {
+                        if data.chunks_depth == self.chunks.len() - 1 {
+                            self.chunk().write(LoadLocal(data.offset));
+                        } else {
+                            let offset = self.thread_binding_as_upvalue(binding);
+                            self.chunk().write(LoadUpValue(offset));
+                        }
+                    }
                 }
             }
             Expr::Block(_) => todo!(),
@@ -158,17 +211,22 @@ impl Visitor for Codegen {
                     self.new_binding_offset(binding, BindingKind::Local);
                 }
                 self.visit_expr(&lambda_expr.expr);
-                let chunk = self.pop_chunk();
-                let value = Value::Object(Rc::new(Object::Closure(Rc::new(ObjClosure {
-                    func: ObjProto {
-                        arity: arity as u32,
-                        chunk,
-                        upvalues_count: 0,
-                    },
-                    upvalues: Vec::new(), // TODO: get upvalues.
-                }))));
+                let data = self.pop_chunk_with_data();
+                let value = Value::Object(Rc::new(Object::Proto(ObjProto {
+                    arity: arity as u32,
+                    chunk: Rc::new(data.chunk),
+                    upvalues_count: data.upvalues.len() as u32,
+                })));
                 let slot = self.chunk().write_const(value);
-                self.chunk().write(LoadConst(slot));
+
+                // Load upvalues.
+                for instr in data.upvalues.iter().rev() {
+                    self.chunk().write(*instr);
+                }
+                self.chunk().write(MakeClosure {
+                    idx: slot,
+                    upvalues: data.upvalues.len() as u32,
+                });
             }
             Expr::Tuple(_) => todo!(),
             Expr::Record(_) => todo!(),
