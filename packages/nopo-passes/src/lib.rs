@@ -3,6 +3,9 @@ pub mod map;
 pub mod resolve;
 pub mod unify;
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};

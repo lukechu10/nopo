@@ -11,3 +11,7 @@ nopo-parser = { path = "../nopo-parser" }
 la-arena = "0.3.0"
 smol_str = "0.2.0"
 thiserror = "1.0.38"
+
+[dev-dependencies]
+concolor = { version = "0.1.1", features = ["auto", "api"] }
+expect-test = "1.4.1"

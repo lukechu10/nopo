@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use la_arena::Arena;
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
 use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
@@ -13,6 +14,7 @@ use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_expr, Visitor};
 
 use crate::check_records::TypeCheckRecords;
+use crate::resolve::Binding;
 
 use super::map::NodeMap;
 use super::resolve::{
@@ -45,6 +47,7 @@ struct CannotCreateInfiniteType<'a> {
 /// Type unification pass (type inference).
 #[derive(Debug)]
 pub struct UnifyTypes {
+    pub bindings: Arena<Binding>,
     pub bindings_map: BindingsMap,
     /// Contains the type of all the bindings.
     pub binding_types_map: HashMap<BindingId, ResolvedType>,
@@ -81,6 +84,7 @@ impl GenerateConstraints {
 impl UnifyTypes {
     pub fn new(resolve: ResolveSymbols, diagnostics: Diagnostics) -> Self {
         Self {
+            bindings: resolve.bindings,
             bindings_map: resolve.bindings_map,
             binding_types_map: HashMap::new(),
             types_map: resolve.types_map,
@@ -688,5 +692,238 @@ impl ResolvedType {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use expect_test::expect;
+
+    use crate::tests::{check_fail, check_types};
+
+    #[test]
+    fn literal_types() {
+        check_types("let x = 42", expect!["x: int"]);
+        check_types("let x = 3.141", expect!["x: float"]);
+        check_types("let x = \"Hello World!\"", expect!["x: string"]);
+        check_types("let x = 'a'", expect!["x: char"]);
+    }
+
+    #[test]
+    fn let_items() {
+        check_types(
+            "let neg x = -x
+             let sum x y = x + y
+             let double z = sum z z",
+            expect![[r#"
+                neg: (int -> int)
+                x: {1}
+                sum: (int -> (int -> int))
+                x: {1}
+                y: {2}
+                double: (int -> int)
+                z: {1}"#]],
+        );
+    }
+
+    #[test]
+    fn let_items_with_explicit_type_annotations() {
+        check_types("let x: int = 42", expect!["x: int"]);
+        check_fail(
+            "let x: string = 42",
+            expect![[r#"
+                Error: could not unify types
+                   ╭─[<test>:1:17]
+                   │
+                 1 │ let x: string = 42
+                   │        ───┬──   ─┬  
+                   │           ╰───────── but inferred to be `string`
+                   │                  │  
+                   │                  ╰── this is of type `int`
+                ───╯
+            "#]],
+        );
+        check_types(
+            "let add_one (x: int): int = x + 1",
+            expect![[r#"
+                add_one: (int -> int)
+                x: int"#]],
+        );
+    }
+
+    #[test]
+    fn polymorphic_let() {
+        check_types(
+            "let id x = x
+             let a = id 1
+             let b = id \"Hello World!\"",
+            expect![[r#"
+                id: forall '2 . ({2} -> {2})
+                x: {1}
+                a: int
+                b: string"#]],
+        );
+    }
+
+    #[test]
+    fn adt() {
+        check_types(
+            "type A = A
+             let a = A",
+            expect![[r#"
+                A: A
+                a: A"#]],
+        );
+        check_types(
+            "type A = A of int
+             let a = A 1",
+            expect![[r#"
+                A: (int -> A)
+                a: A"#]],
+        );
+        check_types(
+            "type List 'a = Nil | Cons of 'a (List 'a)
+             let my_list = Cons 1 (Cons 2 (Cons 3 Nil))
+             let push list x = Cons x list",
+            expect![[r#"
+                Nil: forall 'a . (List {a})
+                Cons: forall 'a . ('a -> ((List 'a) -> (List {a})))
+                my_list: (List int)
+                push: forall '2 . ((List {2}) -> ({2} -> (List {2})))
+                list: {1}
+                x: {2}"#]],
+        );
+    }
+
+    #[test]
+    fn records() {
+        check_types(
+            "type User = {
+                name: string,
+                email: string,
+                id: int,
+            }
+            let my_user: User = {
+                name = \"Test\",
+                email = \"test@test.com\",
+                id = 123
+            }
+            let get_name (user: User) = user.name",
+            expect![[r#"
+                my_user: User
+                get_name: (User -> string)
+                user: User"#]],
+        );
+        check_fail(
+            "type User = {
+                name: string,
+                email: string,
+                id: int,
+            }
+            let get_name user = user.name",
+            expect![[r#"
+                Error: type must be known at this point
+                   ╭─[<test>:6:33]
+                   │
+                 6 │             let get_name user = user.name
+                   │                                 ──┬─  
+                   │                                   ╰─── Type must be known at this point
+                ───╯
+            "#]],
+        );
+        check_fail(
+            "type User = {
+                name: string,
+                email: string,
+                id: int,
+            }
+            let get_name (user: User) = user.unknown_field",
+            expect![[r#"
+                Error: unknown field `unknown_field`
+                   ╭─[<test>:6:46]
+                   │
+                 6 │             let get_name (user: User) = user.unknown_field
+                   │                                              ──────┬──────  
+                   │                                                    ╰──────── Field `unknown_field` not found on type `User`
+                ───╯
+            "#]],
+        );
+    }
+
+    #[test]
+    fn expressions() {
+        check_types(
+            "let a =
+                 let b = 42
+                 in b",
+            expect![[r#"
+                b: {1}
+                a: int"#]],
+        );
+        check_types(
+            "let a =
+                 let b: string = \"abc\"
+                 in b",
+            expect![[r#"
+                b: string
+                a: string"#]],
+        );
+        check_types(
+            "let compose f g = \\x -> f (g x)
+             let a x = x + 1
+             let b x = x * 2
+             let ab = compose a b
+             let y = ab 1",
+            expect![[r#"
+                compose: forall '3 . forall '5 . forall '4 . (({4} -> {5}) -> (({3} -> {4}) -> ({3} -> {5})))
+                f: {1}
+                g: {2}
+                x: {3}
+                a: (int -> int)
+                x: {1}
+                b: (int -> int)
+                x: {1}
+                ab: (int -> int)
+                y: int"#]],
+        );
+        check_types("let a = if true then 0 else 1", expect!["a: int"]);
+    }
+
+    #[test]
+    fn recursive_let_items() {
+        check_types(
+            "let factorial n = if n = 0 then 1 else n * factorial (n - 1)",
+            expect![[r#"
+                factorial: (int -> int)
+                n: {1}"#]],
+        );
+    }
+
+    #[test]
+    fn recursive_types() {
+        check_types(
+            "type List 'a = Nil | Cons of 'a (List 'a)",
+            expect![[r#"
+                Nil: forall 'a . (List {a})
+                Cons: forall 'a . ('a -> ((List 'a) -> (List {a})))"#]],
+        );
+    }
+
+    #[test]
+    fn infinite_type() {
+        check_fail(
+            "let f x = x x",
+            expect![[r#"
+                Error: cannot create infinite type
+                   ╭─[<test>:1:11]
+                   │
+                 1 │ let f x = x x
+                   │           ┬  
+                   │           ╰── this is of type `{1}`
+                   │           │  
+                   │           ╰── but inferred to be `({1} -> {2})`
+                ───╯
+            "#]],
+        );
     }
 }

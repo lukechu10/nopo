@@ -833,7 +833,7 @@ impl Parser {
             };
             params.push(self.finish(start, param));
         }
-        self.expect(Token::Eq);
+        self.expect(Token::RArrow);
         let expr = self.parse_expr();
         self.finish(
             start,

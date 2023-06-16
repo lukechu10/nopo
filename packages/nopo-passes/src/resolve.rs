@@ -721,7 +721,151 @@ impl ResolvedBinding {
     pub fn unwrap(self) -> BindingId {
         match self {
             ResolvedBinding::Ok(id) => id,
-            ResolvedBinding::Err => panic!("unwrapping an errored resolved binding")
+            ResolvedBinding::Err => panic!("unwrapping an errored resolved binding"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use expect_test::expect;
+
+    use crate::tests::{check, check_fail};
+
+    #[test]
+    fn resolve_let_items() {
+        check(
+            "let a = 1
+             let b = a
+             let c = b",
+        );
+    }
+
+    #[test]
+    fn unresolved_binding() {
+        check_fail(
+            "let a = unknown",
+            expect![[r#"
+                Error: unresolved binding `unknown`
+                   ╭─[<test>:1:9]
+                   │
+                 1 │ let a = unknown
+                   │         ───┬───  
+                   │            ╰───── Binding `unknown` not found in current scope
+                ───╯
+            "#]],
+        );
+        check_fail(
+            "let x = x",
+            expect![[r#"
+                Error: unresolved binding `x`
+                   ╭─[<test>:1:9]
+                   │
+                 1 │ let x = x
+                   │         ┬  
+                   │         ╰── Binding `x` not found in current scope
+                ───╯
+            "#]],
+        );
+    }
+
+    #[test]
+    fn adt_data_constructors() {
+        check(
+            "type List 'a = Nil | Cons of 'a (List 'a)
+             let my_list = Cons 1 (Cons 2 (Cons 3 Nil))",
+        );
+    }
+
+    #[test]
+    fn wrong_number_of_type_params() {
+        check_fail(
+            "type Foo 'a 'b = Foo of 'a 'b
+             let foo1: Foo int int int = Foo 1 2
+             let foo2: Foo = Foo 1 2",
+            expect![[r#"
+                Error: wrong number of type parameters for type `Foo`
+                   ╭─[<test>:2:24]
+                   │
+                 1 │ type Foo 'a 'b = Foo of 'a 'b
+                   │      ─┬─  
+                   │       ╰─── `Foo` defined here
+                 2 │              let foo1: Foo int int int = Foo 1 2
+                   │                        ───────┬───────  
+                   │                               ╰───────── 2 type parameter(s) expected but 3 found
+                ───╯
+                Error: wrong number of type parameters for type `Foo`
+                   ╭─[<test>:3:24]
+                   │
+                 1 │ type Foo 'a 'b = Foo of 'a 'b
+                   │      ─┬─  
+                   │       ╰─── `Foo` defined here
+                   │ 
+                 3 │              let foo2: Foo = Foo 1 2
+                   │                        ─┬─  
+                   │                         ╰─── 2 type parameter(s) expected but 0 found
+                ───╯
+            "#]],
+        );
+        check_fail(
+            "type Foo = Foo
+             let foo: Foo int = Foo",
+            expect![[r#"
+                Error: wrong number of type parameters for type `Foo`
+                   ╭─[<test>:2:23]
+                   │
+                 1 │ type Foo = Foo
+                   │      ─┬─  
+                   │       ╰─── `Foo` defined here
+                 2 │              let foo: Foo int = Foo
+                   │                       ───┬───  
+                   │                          ╰───── 0 type parameter(s) expected but 1 found
+                ───╯
+            "#]],
+        );
+        check_fail(
+            "let x: int int = 1",
+            expect![[r#"
+                Error: `int` is not a kind
+                   ╭─[<test>:1:8]
+                   │
+                 1 │ let x: int int = 1
+                   │        ───┬───  
+                   │           ╰───── `int` is a type, not a kind
+                ───╯
+            "#]],
+        );
+    }
+
+    #[test]
+    fn unresolved_type() {
+        check_fail(
+            "let x: UnknownType = 1",
+            expect![[r#"
+                Error: unresolved type `UnknownType`
+                   ╭─[<test>:1:8]
+                   │
+                 1 │ let x: UnknownType = 1
+                   │        ─────┬─────  
+                   │             ╰─────── Type `UnknownType` not found in current scope
+                ───╯
+            "#]],
+        );
+    }
+
+    #[test]
+    fn unresolved_type_param() {
+        check_fail(
+            "type Foo = Foo of 'a",
+            expect![[r#"
+                Error: unresolved type parameter `'a`
+                   ╭─[<test>:1:19]
+                   │
+                 1 │ type Foo = Foo of 'a
+                   │                    ┬  
+                   │                    ╰── Type param `'a` not found in current scope
+                ───╯
+            "#]],
+        );
     }
 }

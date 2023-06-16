@@ -11,9 +11,8 @@ fn check_root(input: &str, expect: Expect) {
     let id = map.create_virtual_file("<test>", input.to_string());
 
     let mut parser = Parser::new(id, input, diagnostics.clone());
-    assert!(diagnostics.eprint(&map));
-
     let root = parser.parse_root();
+    assert!(diagnostics.eprint(&map));
     expect.assert_debug_eq(&root);
 }
 
@@ -24,9 +23,8 @@ fn check_expr(input: &str, expect: Expect) {
     let id = map.create_virtual_file("<test>", input.to_string());
 
     let mut parser = Parser::new(id, input, diagnostics.clone());
-    assert!(diagnostics.eprint(&map));
-
     let root = parser.parse_expr();
+    assert!(diagnostics.eprint(&map));
     expect.assert_debug_eq(&root);
 }
 

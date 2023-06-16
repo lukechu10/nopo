@@ -2,8 +2,8 @@
 
 pub mod span;
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::{fmt, io};
 
 pub use ariadne;
 
@@ -89,6 +89,16 @@ impl Diagnostics {
     pub fn add(&self, report: impl IntoReport) {
         let report = report.into_report().finish();
         self.0.lock().unwrap().reports.push(report);
+    }
+
+    /// Prints all the reports to the output stream. Color is disabled. Returns `false` if not
+    /// empty.
+    pub fn write(&self, map: &FileIdMap, mut w: impl io::Write) -> bool {
+        let mut cache = FileCache::new(map);
+        for report in &self.0.lock().unwrap().reports {
+            report.write(&mut cache, &mut w).unwrap();
+        }
+        self.is_empty()
     }
 
     /// Prints all the reports to `stderr`. Returns `false` if not empty.
