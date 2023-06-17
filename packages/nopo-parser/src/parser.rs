@@ -617,6 +617,10 @@ impl Parser {
         }
     }
 
+    pub fn peek_is_expr(&self) -> bool {
+        self.peek_is_primary_expr() || self.peek_next() == &Token::KwLet
+    }
+
     pub fn peek_is_primary_expr(&self) -> bool {
         match self.peek_next() {
             Token::Ident(_)
@@ -863,7 +867,7 @@ impl Parser {
         let start = self.start();
         self.expect(Token::LParen);
         let mut elements = Vec::new();
-        while self.peek_is_primary_expr() {
+        while self.peek_is_expr() {
             elements.push(self.parse_expr());
             if self.peek_next() != &Token::Comma {
                 break;

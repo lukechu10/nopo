@@ -9,8 +9,13 @@ use crate::types::{Chunk, Instr};
 pub fn print_chunk(chunk: &Chunk, f: &mut dyn io::Write) -> io::Result<()> {
     writeln!(f, "== {} ==", chunk.name)?;
     writeln!(f, "== CODE")?;
-    for (offset, instr) in chunk.code.iter().enumerate() {
-        writeln!(f, "{:>4} {instr}", Paint::rgb(150, 150, 150, offset))?;
+    for (offset, instr) in chunk.code.iter().copied().enumerate() {
+        writeln!(
+            f,
+            "{:>4} {}",
+            Paint::rgb(150, 150, 150, offset),
+            InstrOffset(offset, instr)
+        )?;
     }
     writeln!(f, "== CONSTS")?;
     for (idx, value) in chunk.consts.iter().enumerate() {
@@ -20,9 +25,12 @@ pub fn print_chunk(chunk: &Chunk, f: &mut dyn io::Write) -> io::Result<()> {
     Ok(())
 }
 
-impl fmt::Display for Instr {
+struct InstrOffset(usize, Instr);
+
+impl fmt::Display for InstrOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        let &Self(byte_pos, instr) = self;
+        match instr {
             Instr::LoadBool(value) => write!(f, "{:<15} value: {value}", "load.bool"),
             Instr::LoadInt(value) => write!(f, "{:<15} value: {value}", "load.int"),
             Instr::LoadFloat(value) => write!(f, "{:<15} value: {value}", "load.float"),
@@ -31,8 +39,19 @@ impl fmt::Display for Instr {
             Instr::LoadLocal(idx) => write!(f, "{:<15} idx: {idx}", "load.local"),
             Instr::LoadGlobal(idx) => write!(f, "{:<15} idx: {idx}", "load.global"),
             Instr::LoadUpValue(idx) => write!(f, "{:<15} idx: {idx}", "load.upvalue"),
-            Instr::Jump(offset) => write!(f, "{:<15} offset: {offset}", "jump"),
-            Instr::CJump(offset) => write!(f, "{:<15} offset: {offset}", "cjump"),
+            Instr::Dup => write!(f, "{:<15}", "dup"),
+            Instr::Jump(offset) => write!(
+                f,
+                "{:<15} offset: {offset} (target: {})",
+                "jump",
+                byte_pos as u32 + offset + 1
+            ),
+            Instr::CJump(offset) => write!(
+                f,
+                "{:<15} offset: {offset} (target: {})",
+                "cjump",
+                byte_pos as u32 + offset + 1
+            ),
             Instr::Calli { args } => write!(f, "{:<15} args: {args}", "calli"),
             Instr::CallGlobal { idx, args } => {
                 write!(f, "{:<15} idx: {idx}, args: {args}", "call.global")
@@ -47,6 +66,8 @@ impl fmt::Display for Instr {
                 write!(f, "{:<15} tag: {tag}, args: {args}", "make.adt")
             }
             Instr::GetField(idx) => write!(f, "{:<15} idx: {idx}", "get.field"),
+            Instr::GetFieldPush(idx) => write!(f, "{:<15} idx: {idx}", "get.field.push"),
+            Instr::HasTag(tag) => write!(f, "{:<15} tag: {tag}", "has.tag"),
             Instr::IntAdd => write!(f, "{:<15}", "int.add"),
             Instr::IntSub => write!(f, "{:<15}", "int.sub"),
             Instr::IntMul => write!(f, "{:<15}", "int.mul"),
@@ -67,6 +88,7 @@ impl fmt::Display for Instr {
             Instr::BoolOr => write!(f, "{:<15}", "bool.or"),
             Instr::ValEq => write!(f, "{:<15}", "eq"),
             Instr::Pop => write!(f, "{:<15}", "pop"),
+            Instr::PopN(n) => write!(f, "{:<15} {n}", "pop.n"),
             Instr::Slide(n) => write!(f, "{:<15} {n}", "slide"),
         }
     }

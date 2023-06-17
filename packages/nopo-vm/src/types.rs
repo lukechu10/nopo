@@ -49,6 +49,8 @@ pub enum Instr {
     LoadGlobal(VmIndex),
     /// Load an upvalue.
     LoadUpValue(VmIndex),
+    /// Duplicate the top value.
+    Dup,
     /// Jump to the relative index in the current calling frame.
     Jump(VmIndex),
     /// Branched jump to the relative index in the current calling frame, if and only if the top
@@ -84,9 +86,15 @@ pub enum Instr {
         /// How many args.
         args: VmIndex,
     },
-    /// Get a field of a tuple or adt is at the top of the stack. Replaces the top of the stack
-    /// with the value of the field.
+    /// Get a field of a tuple or adt that is at the top of the stack. Replaces the top of the
+    /// stack with the value of the field.
     GetField(VmIndex),
+    /// Get a field of a tuple or adt that is at the top of the stack. Pushes, instead of replacing
+    /// the top.
+    GetFieldPush(VmIndex),
+    /// Pushes a boolean representing whether the current top value is an ADT with the specified
+    /// tag.
+    HasTag(VmIndex),
 
     IntAdd,
     IntSub,
@@ -119,6 +127,8 @@ pub enum Instr {
 
     /// Pop a value of the stack and discard it.
     Pop,
+    /// Pop n values of the stack and discard them.
+    PopN(VmIndex),
     /// Pops the top value. Then pops index number of values. Finally pushes the top value back on.
     Slide(VmIndex),
 }

@@ -263,6 +263,9 @@ impl Vm {
                     let value = self.resolve_upvalue_into_value(&upvalue.borrow());
                     self.stack.push(value);
                 }
+                Instr::Dup => {
+                    self.stack.push(self.stack.last().unwrap().clone());
+                }
                 Instr::Jump(distance) => {
                     *self.ip_mut() += distance as usize;
                 }
@@ -317,11 +320,26 @@ impl Vm {
                     let value = self.pop();
                     let field = match &**value.as_object().unwrap() {
                         Object::Tuple(values) | Object::Adt(_, values) => {
-                            values.into_iter().nth(idx as usize).unwrap()
+                            values[idx as usize].clone()
                         }
                         _ => unreachable!(),
                     };
-                    self.stack.push(field.clone())
+                    self.stack.push(field);
+                }
+                Instr::GetFieldPush(idx) => {
+                    let value = self.stack.last().unwrap();
+                    let field = match &**value.as_object().unwrap() {
+                        Object::Tuple(values) | Object::Adt(_, values) => {
+                            values[idx as usize].clone()
+                        }
+                        _ => unreachable!(),
+                    };
+                    self.stack.push(field);
+                }
+                Instr::HasTag(tag) => {
+                    let value = self.stack.last().unwrap();
+                    let has_tag = *value.as_object().unwrap().as_adt().unwrap().0 == tag;
+                    self.stack.push(Value::Bool(has_tag));
                 }
                 Instr::IntAdd => gen_int_op!(+),
                 Instr::IntSub => gen_int_op!(-),
@@ -376,6 +394,11 @@ impl Vm {
                 }
                 Instr::Pop => {
                     let _ = self.pop();
+                }
+                Instr::PopN(n) => {
+                    for _ in 0..n {
+                        let _ = self.pop();
+                    }
                 }
                 Instr::Slide(idx) => {
                     let top = self.pop();

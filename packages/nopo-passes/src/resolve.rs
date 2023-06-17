@@ -359,10 +359,11 @@ impl Visitor for ResolveSymbols {
 
         // Create bindings for all ADT data constructors.
         if let TypeDef::Adt(adt) = &*item.def {
-            for data_constructor in &adt.data_constructors {
+            for (tag, data_constructor) in adt.data_constructors.iter().enumerate() {
                 let binding = self.new_binding_scope(Binding::new_data_constructor(
                     data_constructor.ident.as_ref().clone(),
                     data_constructor.of.len(),
+                    tag as u32,
                 ));
                 self.bindings_map
                     .data_constructors
@@ -552,13 +553,13 @@ impl Visitor for ResolveSymbols {
                         }
                         // Make sure that we have the right number of args.
                         let expected = self.bindings[symbol].data_constructor_args;
-                        if expected != 0 {
+                        if expected != adt.of.len() {
                             self.diagnostics
                                 .add(WrongNumberOfArgsForDataConstructorInPattern {
                                     span: ident.span(),
                                     ident: ident.clone(),
                                     expected,
-                                    found: 0,
+                                    found: adt.of.len(),
                                 });
                         }
                     }
@@ -828,6 +829,8 @@ pub struct Binding {
     pub is_data_constructor: bool,
     /// The number of arguments that is expected for this data-constructor.
     pub data_constructor_args: usize,
+    /// The tag of sum type constructed by the data-constructor.
+    pub data_constructor_tag: u32,
 }
 
 impl Binding {
@@ -837,15 +840,17 @@ impl Binding {
             ident,
             is_data_constructor: false,
             data_constructor_args: 0, // TODO: do not have dummy field.
+            data_constructor_tag: 0,  // TODO: above
         }
     }
 
     /// Create a new binding that is a data-constructor.
-    pub fn new_data_constructor(ident: Ident, args: usize) -> Self {
+    pub fn new_data_constructor(ident: Ident, args: usize, tag: u32) -> Self {
         Self {
             ident,
             is_data_constructor: true,
             data_constructor_args: args,
+            data_constructor_tag: tag,
         }
     }
 }

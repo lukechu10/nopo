@@ -3,12 +3,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use la_arena::ArenaMap;
+use la_arena::{Arena, ArenaMap};
 use nopo_diagnostics::span::Spanned;
-use nopo_parser::ast::{Expr, LetId, LetItem, LitExpr, Root, TypeDef, TypeId, TypeItem};
+use nopo_parser::ast::{Expr, LetId, LetItem, LitExpr, Pattern, Root, TypeDef, TypeId, TypeItem};
 use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_root, Visitor};
-use nopo_passes::resolve::{BindingId, BindingsMap, ResolvedType, TypesMap};
+use nopo_passes::resolve::{Binding, BindingId, BindingsMap, ResolvedType, TypesMap};
 use nopo_passes::unify::UnifyTypes;
 
 use crate::print::print_chunk;
@@ -17,6 +17,7 @@ use crate::types::{Chunk, ObjClosure, ObjProto, Object, Value, VmIndex};
 
 #[derive(Debug)]
 pub struct Codegen {
+    bindings: Arena<Binding>,
     bindings_map: BindingsMap,
     /// Contains the type of all the bindings.
     binding_types_map: HashMap<BindingId, ResolvedType>,
@@ -51,9 +52,15 @@ enum BindingKind {
     Local,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct OffsetState {
+    next_offset: u32,
+}
+
 impl Codegen {
     pub fn new(unify: UnifyTypes) -> Self {
         Self {
+            bindings: unify.bindings,
             bindings_map: unify.bindings_map,
             binding_types_map: unify.binding_types_map,
             types_map: unify.types_map,
@@ -129,6 +136,16 @@ impl Codegen {
         }
 
         offset
+    }
+
+    fn offset_state(&self) -> OffsetState {
+        OffsetState {
+            next_offset: self.chunks.last().unwrap().next_offset,
+        }
+    }
+
+    fn restore_state(&mut self, state: OffsetState) {
+        self.chunks.last_mut().unwrap().next_offset = state.next_offset;
     }
 
     pub fn root_closure(mut self) -> ObjClosure {
@@ -389,12 +406,42 @@ impl Visitor for Codegen {
                 self.visit_expr(&if_expr.then);
                 self.chunk().patch_jump(else_jump);
             }
-            Expr::Match(_) => todo!("codegen match"),
+            Expr::Match(match_expr) => {
+                self.visit_expr(&match_expr.matched);
+                let mut jumps = Vec::new();
+                let mut slides = Vec::new();
+                // Codegen for matching the pattern.
+                for arm in &match_expr.arms {
+                    let state = self.offset_state();
+                    self.visit_pattern(&arm.pattern);
+                    // Number of bindings + 1 for the bool created by pattern.
+                    let diff = self.offset_state().next_offset - state.next_offset;
+                    slides.push(diff);
+
+                    // Jump to that arm if pattern was matched.
+                    jumps.push(self.chunk().write_get_offset(CJump(0)));
+                    self.restore_state(state);
+                }
+                // Codegen for the actual expression.
+                let mut jumps_end = Vec::new();
+                for ((arm, jump), slide) in match_expr.arms.iter().zip(jumps).zip(slides) {
+                    self.chunk().patch_jump(jump);
+                    self.visit_expr(&arm.expr);
+                    if slide != 0 {
+                        self.chunk().write(Slide(slide));
+                    }
+                    jumps_end.push(self.chunk().write_get_offset(Jump(0)));
+                }
+                for jump_end in jumps_end {
+                    self.chunk().patch_jump(jump_end);
+                }
+            }
             Expr::While(_) => todo!(),
             Expr::For(_) => todo!(),
             Expr::Loop(_) => todo!(),
             Expr::Return(_) => todo!(),
             Expr::Let(let_expr) => {
+                let state = self.offset_state();
                 let binding = self.bindings_map.let_exprs[&*let_expr];
                 let kind = if self.chunks.len() == 1 {
                     BindingKind::Global
@@ -405,8 +452,83 @@ impl Visitor for Codegen {
                 self.visit_expr(&let_expr.expr);
                 self.visit_expr(&let_expr._in);
                 self.chunk().write(Slide(1));
+                self.restore_state(state);
             }
             Expr::Err => unreachable!(),
+        }
+    }
+
+    /// The result of visitng a pattern should be a boolean value at the top of the stack
+    /// representing whether this pattern was successfully matched.
+    fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
+        match &**pattern {
+            Pattern::Path(_path) => {
+                if let Some(symbol) = self.bindings_map.pattern_tags.get(pattern) {
+                    let symbol = symbol.unwrap();
+                    let tag = self.bindings[symbol].data_constructor_tag;
+                    self.chunk().write(HasTag(tag));
+                } else {
+                    let binding = self.bindings_map.pattern[pattern];
+                    let kind = if self.chunks.len() == 1 {
+                        BindingKind::Global
+                    } else {
+                        BindingKind::Local
+                    };
+                    self.new_binding_offset(binding, kind);
+                    self.chunk().write(LoadBool(true));
+                }
+            }
+            Pattern::Adt(adt) => {
+                let symbol = self.bindings_map.pattern_tags[pattern].unwrap();
+                let tag = self.bindings[symbol].data_constructor_tag;
+                // First check if we have the right tag.
+                self.chunk().write(HasTag(tag));
+
+                // If false, short circuit. Otherwise keep on checking each arg.
+                let mut jumps_false = Vec::new();
+
+                // Jump to next success.
+                let mut jump_next_true = self.chunk().write_get_offset(CJump(0));
+                jumps_false.push(self.chunk().write_get_offset(Jump(0)));
+
+                for (field, sub_pattern) in adt.of.iter().enumerate() {
+                    self.chunk().patch_jump(jump_next_true);
+                    // Get the field to pattern amtch on.
+                    self.chunk().write(GetFieldPush(field as u32));
+                    self.visit_pattern(sub_pattern);
+                    // Get rid of this field so that we can match the next one.
+                    self.chunk().write(Slide(1));
+                    jump_next_true = self.chunk().write_get_offset(CJump(0));
+                    jumps_false.push(self.chunk().write_get_offset(Jump(0)));
+                }
+
+                // False destination.
+                for jump_end in jumps_false {
+                    self.chunk().patch_jump(jump_end);
+                }
+                self.chunk().write(LoadBool(false));
+
+                // True destination.
+                self.chunk().patch_jump(jump_next_true);
+                self.chunk().write(LoadBool(true));
+            }
+            Pattern::Lit(lit) => {
+                self.chunk().write(Dup);
+                // FIXME: code duplication with visit_expr.
+                match &**lit {
+                    LitExpr::Bool(value) => self.chunk().write(LoadBool(*value)),
+                    LitExpr::Int(value) => self.chunk().write(LoadInt(*value)),
+                    LitExpr::Float(_value) => todo!("load float"),
+                    LitExpr::String(value) => {
+                        let value = Value::Object(Rc::new(Object::String(value.clone())));
+                        let str_const = self.chunk().write_const(value);
+                        self.chunk().write(LoadConst(str_const));
+                    }
+                    LitExpr::Char(value) => self.chunk().write(LoadChar(*value)),
+                }
+                self.chunk().write(ValEq);
+            }
+            Pattern::Err => unreachable!(),
         }
     }
 }

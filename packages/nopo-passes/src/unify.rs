@@ -161,7 +161,7 @@ impl Visitor for UnifyTypes {
                         ResolvedType::new_curried_function(&variant.types, c_ty.clone())
                             .generalize();
                     let pretty = c_data_constructor_ty.pretty(&self.types_map.items);
-                    eprintln!("{:>20}: {pretty}", data_constructor.ident);
+                    eprintln!(" {}: {pretty}", data_constructor.ident);
                     self.binding_types_map
                         .insert(binding, c_data_constructor_ty);
                 }
@@ -437,6 +437,7 @@ impl Visitor for UnifyTypes {
                 if let Some(symbol) = self.bindings_map.pattern_tags.get(pattern) {
                     if let ResolvedBinding::Ok(symbol) = symbol {
                         let c_fn_ty = self.binding_types_map[symbol].clone();
+                        let c_fn_ty = self.state.instantiate(c_fn_ty);
                         c_fn_ty.uncurry_function().1
                     } else {
                         self.state.new_type_var()
@@ -452,6 +453,7 @@ impl Visitor for UnifyTypes {
                 let symbol = &self.bindings_map.pattern_tags[pattern];
                 if let ResolvedBinding::Ok(symbol) = symbol {
                     let c_fn_ty = self.binding_types_map[symbol].clone();
+                    let c_fn_ty = self.state.instantiate(c_fn_ty);
                     let (c_fn_args, c_ty) = c_fn_ty.uncurry_function();
                     // Constrain the types of all the fields.
                     for (sub_pattern, c_fn_arg) in adt.of.iter().zip(c_fn_args) {
