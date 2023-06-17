@@ -51,6 +51,10 @@ pub enum Instr {
     LoadUpValue(VmIndex),
     /// Duplicate the top value.
     Dup,
+    /// Duplicate the value that is a certain number of indices below the top.
+    DupRel(VmIndex),
+    /// Swap the top two values.
+    Swap,
     /// Jump to the relative index in the current calling frame.
     Jump(VmIndex),
     /// Branched jump to the relative index in the current calling frame, if and only if the top

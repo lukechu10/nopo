@@ -93,15 +93,23 @@ impl Codegen {
         data
     }
 
+    /// Increment the stack offset. This is automatically called by [`Self::new_binding_offset`].
+    /// Returns the current offset.
+    fn inc_offset(&mut self) -> u32 {
+        let last_chunk = self.chunks.last_mut().unwrap();
+        let offset = last_chunk.next_offset;
+        last_chunk.next_offset += 1;
+        offset
+    }
+
     /// Insert a new entry into the offset map.
     fn new_binding_offset(&mut self, id: BindingId, kind: BindingKind) {
-        let offset = self.chunks.last_mut().unwrap().next_offset;
+        let offset = self.inc_offset();
         let binding_data = BindingOffset {
             kind,
             offset,
             chunks_depth: self.chunks.len() - 1,
         };
-        self.chunks.last_mut().unwrap().next_offset += 1;
         self.offset_map.insert(id, binding_data);
     }
 
@@ -409,27 +417,28 @@ impl Visitor for Codegen {
             Expr::Match(match_expr) => {
                 self.visit_expr(&match_expr.matched);
                 let mut jumps = Vec::new();
-                let mut slides = Vec::new();
                 // Codegen for matching the pattern.
                 for arm in &match_expr.arms {
-                    let state = self.offset_state();
                     self.visit_pattern(&arm.pattern);
-                    // Number of bindings + 1 for the bool created by pattern.
-                    let diff = self.offset_state().next_offset - state.next_offset;
-                    slides.push(diff);
-
                     // Jump to that arm if pattern was matched.
                     jumps.push(self.chunk().write_get_offset(CJump(0)));
-                    self.restore_state(state);
                 }
                 // Codegen for the actual expression.
                 let mut jumps_end = Vec::new();
-                for ((arm, jump), slide) in match_expr.arms.iter().zip(jumps).zip(slides) {
+                for (arm, jump) in match_expr.arms.iter().zip(jumps) {
                     self.chunk().patch_jump(jump);
+
+                    let state = self.offset_state();
+                    self.visit_pattern_bindings(&arm.pattern);
+                    let diff = self.offset_state().next_offset - state.next_offset;
+
                     self.visit_expr(&arm.expr);
-                    if slide != 0 {
-                        self.chunk().write(Slide(slide));
+
+                    // Cleanup pattern bindings.
+                    if diff != 0 {
+                        self.chunk().write(Slide(diff));
                     }
+                    self.restore_state(state);
                     jumps_end.push(self.chunk().write_get_offset(Jump(0)));
                 }
                 for jump_end in jumps_end {
@@ -460,6 +469,8 @@ impl Visitor for Codegen {
 
     /// The result of visitng a pattern should be a boolean value at the top of the stack
     /// representing whether this pattern was successfully matched.
+    ///
+    /// This does not create any bindings inside the pattern.
     fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
         match &**pattern {
             Pattern::Path(_path) => {
@@ -468,13 +479,7 @@ impl Visitor for Codegen {
                     let tag = self.bindings[symbol].data_constructor_tag;
                     self.chunk().write(HasTag(tag));
                 } else {
-                    let binding = self.bindings_map.pattern[pattern];
-                    let kind = if self.chunks.len() == 1 {
-                        BindingKind::Global
-                    } else {
-                        BindingKind::Local
-                    };
-                    self.new_binding_offset(binding, kind);
+                    // Bindings match everything.
                     self.chunk().write(LoadBool(true));
                 }
             }
@@ -484,33 +489,29 @@ impl Visitor for Codegen {
                 // First check if we have the right tag.
                 self.chunk().write(HasTag(tag));
 
-                // If false, short circuit. Otherwise keep on checking each arg.
-                let mut jumps_false = Vec::new();
-
-                // Jump to next success.
-                let mut jump_next_true = self.chunk().write_get_offset(CJump(0));
-                jumps_false.push(self.chunk().write_get_offset(Jump(0)));
-
-                for (field, sub_pattern) in adt.of.iter().enumerate() {
-                    self.chunk().patch_jump(jump_next_true);
-                    // Get the field to pattern amtch on.
-                    self.chunk().write(GetFieldPush(field as u32));
-                    self.visit_pattern(sub_pattern);
-                    // Get rid of this field so that we can match the next one.
-                    self.chunk().write(Slide(1));
-                    jump_next_true = self.chunk().write_get_offset(CJump(0));
-                    jumps_false.push(self.chunk().write_get_offset(Jump(0)));
-                }
-
-                // False destination.
-                for jump_end in jumps_false {
-                    self.chunk().patch_jump(jump_end);
-                }
+                // If we have the right tag, check all the sub patterns.
+                let jump_true = self.chunk().write_get_offset(CJump(0));
                 self.chunk().write(LoadBool(false));
+                let jump_end = self.chunk().write_get_offset(Jump(0));
 
-                // True destination.
-                self.chunk().patch_jump(jump_next_true);
-                self.chunk().write(LoadBool(true));
+                self.chunk().patch_jump(jump_true);
+                self.chunk().write(Dup);
+                for (field, sub_pattern) in adt.of.iter().enumerate() {
+                    self.chunk().write(GetField(field as u32));
+                    self.visit_pattern(sub_pattern);
+                    // Discard field.
+                    self.chunk().write(Slide(1));
+                    // Get the original value back on top (it's under `field` number of bools)
+                    self.chunk().write(DupRel(field as u32 + 1));
+                }
+                self.chunk().write(Pop);
+                // Get rid of the original value now.
+                // Only match if the conjunction of all sub patterns match.
+                for _ in 0..adt.of.len() - 1 {
+                    self.chunk().write(BoolAnd);
+                }
+
+                self.chunk().patch_jump(jump_end);
             }
             Pattern::Lit(lit) => {
                 self.chunk().write(Dup);
@@ -528,6 +529,38 @@ impl Visitor for Codegen {
                 }
                 self.chunk().write(ValEq);
             }
+            Pattern::Err => unreachable!(),
+        }
+    }
+}
+
+impl Codegen {
+    // Create the bindings used in this pattern.
+    fn visit_pattern_bindings(&mut self, pattern: &Spanned<Pattern>) {
+        match &**pattern {
+            Pattern::Path(_) => {
+                if let Some(&binding) = self.bindings_map.pattern.get(pattern) {
+                    let kind = if self.chunks.len() == 1 {
+                        BindingKind::Global
+                    } else {
+                        BindingKind::Local
+                    };
+                    self.new_binding_offset(binding, kind);
+                }
+            }
+            Pattern::Adt(adt) => {
+                self.chunk().write(Dup);
+                for (field, sub_pattern) in adt.of.iter().enumerate() {
+                    if !matches!(&**sub_pattern, Pattern::Path(_)) {
+                        self.inc_offset(); // TODO: do not use up useless stack space.
+                    }
+                    self.chunk().write(GetField(field as u32));
+                    self.visit_pattern_bindings(sub_pattern);
+                    self.chunk().write(DupRel(field as u32 + 1));
+                }
+                self.chunk().write(Pop);
+            }
+            Pattern::Lit(_) => {}
             Pattern::Err => unreachable!(),
         }
     }

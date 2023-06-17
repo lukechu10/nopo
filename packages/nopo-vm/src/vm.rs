@@ -266,6 +266,14 @@ impl Vm {
                 Instr::Dup => {
                     self.stack.push(self.stack.last().unwrap().clone());
                 }
+                Instr::DupRel(n) => {
+                    self.stack
+                        .push(self.stack[self.stack.len() - 1 - n as usize].clone());
+                }
+                Instr::Swap => {
+                    let stack_len = self.stack.len();
+                    self.stack.swap(stack_len - 1, stack_len - 2);
+                }
                 Instr::Jump(distance) => {
                     *self.ip_mut() += distance as usize;
                 }
@@ -409,6 +417,17 @@ impl Vm {
                 }
             }
             *self.ip_mut() += 1;
+        }
+    }
+}
+
+impl Drop for Vm {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // VM has crashed. Print some debugging info.
+            eprintln!("VM Crashed");
+            eprintln!("Chunk name: {}", self.frame().closure.proto.chunk.name);
+            eprintln!("IP: {}", self.frame().ip);
         }
     }
 }

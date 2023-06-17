@@ -40,6 +40,8 @@ impl fmt::Display for InstrOffset {
             Instr::LoadGlobal(idx) => write!(f, "{:<15} idx: {idx}", "load.global"),
             Instr::LoadUpValue(idx) => write!(f, "{:<15} idx: {idx}", "load.upvalue"),
             Instr::Dup => write!(f, "{:<15}", "dup"),
+            Instr::DupRel(rel) => write!(f, "{:<15} rel: {rel}", "dup.rel"),
+            Instr::Swap => write!(f, "{:<15}", "swap"),
             Instr::Jump(offset) => write!(
                 f,
                 "{:<15} offset: {offset} (target: {})",
