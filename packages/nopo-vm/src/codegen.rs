@@ -554,7 +554,6 @@ impl Codegen {
     // Create the bindings used in this pattern.
     // Does not remove the original top value of the stack.
     fn visit_pattern_bindings(&mut self, pattern: &Spanned<Pattern>) {
-        let offset = self.offset_state().next_offset - 1;
         match &**pattern {
             Pattern::Path(_) => {
                 if let Some(&binding) = self.bindings_map.pattern.get(pattern) {
@@ -567,13 +566,14 @@ impl Codegen {
                 }
             }
             Pattern::Adt(adt) => {
+                self.chunk().write(Dup);
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
                     self.inc_offset();
-                    self.chunk().write(LoadLocal(offset));
                     self.chunk().write(GetField(field as u32));
-
                     self.visit_pattern_bindings(sub_pattern);
+                    self.chunk().write(DupRel(field as u32 + 1));
                 }
+                self.chunk().write(Pop);
             }
             Pattern::Lit(_) => {}
             Pattern::Err => unreachable!(),
