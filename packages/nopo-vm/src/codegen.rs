@@ -20,8 +20,8 @@ pub struct Codegen {
     bindings: Arena<Binding>,
     bindings_map: BindingsMap,
     /// Contains the type of all the bindings.
-    binding_types_map: HashMap<BindingId, ResolvedType>,
-    types_map: TypesMap,
+    _binding_types_map: HashMap<BindingId, ResolvedType>,
+    _types_map: TypesMap,
     offset_map: ArenaMap<BindingId, BindingOffset>,
     chunks: Vec<ChunkWithData>,
 }
@@ -62,8 +62,8 @@ impl Codegen {
         Self {
             bindings: unify.bindings,
             bindings_map: unify.bindings_map,
-            binding_types_map: unify.binding_types_map,
-            types_map: unify.types_map,
+            _binding_types_map: unify.binding_types_map,
+            _types_map: unify.types_map,
             offset_map: ArenaMap::new(),
             chunks: Vec::new(),
         }

@@ -646,7 +646,7 @@ impl ResolvedType {
         match self {
             Self::Fn { arg, ret } => {
                 let (mut args, ret) = ret.uncurry_function();
-                args.push(*arg);
+                args.insert(0, *arg);
                 (args, ret)
             }
             _ => (Vec::new(), self),
