@@ -29,6 +29,12 @@ pub enum Token {
     Prime,
     #[token("\\")]
     BackSlash,
+    #[token("&")]
+    And,
+    #[token("|")]
+    Or,
+    #[token("^")]
+    Xor,
 
     // Operators
     #[token("+")]
@@ -59,12 +65,13 @@ pub enum Token {
     #[token("!=")]
     Neq,
 
-    #[token("&")]
-    And,
-    #[token("|")]
-    Or,
-    #[token("^")]
-    Xor,
+    #[token("&&&")]
+    BitwiseAnd,
+    #[token("|||")]
+    BitwiseOr,
+    #[token("^^^")]
+    BitwiseXor,
+
     #[token(">>")]
     ShiftRight,
     #[token("<<")]
@@ -90,6 +97,10 @@ pub enum Token {
     KwThen,
     #[token("else")]
     KwElse,
+    #[token("match")]
+    KwMatch,
+    #[token("with")]
+    KwWith,
     #[token("while")]
     KwWhile,
     #[token("for")]
@@ -125,7 +136,7 @@ pub enum Token {
     #[regex("[0-9]+\\.[0-9]+", |lex| lex.slice().to_string())]
     LitFloat(String),
     #[regex(r#""(?:[^"]|\\")*""#, |lex| lex.slice()[1..lex.slice().len() - 1].to_string())]
-    LitStr(String),
+    LitString(String),
     #[regex(r#"'([^'\\]|\\.)'"#, |lex| lex.slice()[1..lex.slice().len() - 1].to_string())]
     LitChar(String),
 
@@ -156,6 +167,9 @@ impl fmt::Display for Token {
             Token::RArrow => "`->`",
             Token::Prime => "`'`",
             Token::BackSlash => "`\\`",
+            Token::And => "`&`",
+            Token::Or => "`|`",
+            Token::Xor => "`^`",
             Token::Plus => "`+`",
             Token::Minus => "`-`",
             Token::Star => "`*`",
@@ -169,9 +183,9 @@ impl fmt::Display for Token {
             Token::LtEq => "`<=`",
             Token::GtEq => "`>=`",
             Token::Neq => "`!=`",
-            Token::And => "`&`",
-            Token::Or => "`|`",
-            Token::Xor => "`^`",
+            Token::BitwiseAnd => "`&&&`",
+            Token::BitwiseOr => "`|||`",
+            Token::BitwiseXor => "`^^^`",
             Token::ShiftRight => "`>>`",
             Token::ShiftLeft => "`<<`",
             Token::UnsignedShiftRight => "`>>>`",
@@ -183,6 +197,8 @@ impl fmt::Display for Token {
             Token::KwIf => "`if`",
             Token::KwThen => "`then`",
             Token::KwElse => "`else`",
+            Token::KwMatch => "`match`",
+            Token::KwWith => "`when`",
             Token::KwWhile => "`while`",
             Token::KwFor => "`for`",
             Token::KwIn => "`in`",
@@ -198,7 +214,7 @@ impl fmt::Display for Token {
             Token::LitFalse => "`false`",
             Token::LitInt(_) => "an int literal",
             Token::LitFloat(_) => "a float literal",
-            Token::LitStr(_) => "a string literal",
+            Token::LitString(_) => "a string literal",
             Token::LitChar(_) => "a char literal",
             Token::Start => "START",
             Token::Eof => "end of file",
@@ -252,9 +268,9 @@ impl TryFrom<Token> for BinOp {
             Token::Star => Ok(BinOp::Mul),
             Token::Slash => Ok(BinOp::Div),
             Token::Percent => Ok(BinOp::Mod),
-            Token::And => Ok(BinOp::And),
-            Token::Or => Ok(BinOp::Or),
-            Token::Xor => Ok(BinOp::Xor),
+            Token::BitwiseAnd => Ok(BinOp::And),
+            Token::BitwiseOr => Ok(BinOp::Or),
+            Token::BitwiseXor => Ok(BinOp::Xor),
             Token::ShiftLeft => Ok(BinOp::ShiftLeft),
             Token::ShiftRight => Ok(BinOp::ShiftRight),
             Token::UnsignedShiftRight => Ok(BinOp::UnsignedShiftRight),

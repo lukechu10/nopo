@@ -9,12 +9,12 @@ use nopo_diagnostics::{Diagnostics, IntoReport, Report};
 use smol_str::SmolStr;
 
 use nopo_parser::ast::{
-    BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, ItemId,
-    LambdaExpr, LambdaParam, LetExpr, LetId, LetItem, Param, PathType, TupleType, Type, TypeDef,
-    TypeId, TypeItem, TypeParam,
+    BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, IfExpr, ItemId,
+    LambdaExpr, LambdaParam, LetExpr, LetId, LetItem, MatchExpr, Param, Path, Pattern, TupleType,
+    Type, TypeDef, TypeId, TypeItem, TypeParam,
 };
 use nopo_parser::lexer::BinOp;
-use nopo_parser::visitor::{walk_expr, walk_let_item, walk_type_item, Visitor};
+use nopo_parser::visitor::{walk_expr, walk_let_item, walk_pattern, walk_type_item, Visitor};
 
 use crate::map::NodeMap;
 
@@ -70,6 +70,26 @@ struct NotAKind<'a> {
     ty: Spanned<ResolvedTypePretty<'a>>,
 }
 
+#[derive(Report)]
+#[kind("error")]
+#[message("wrong number of arguments found for data-constructor `{ident}` in this pattern")]
+struct WrongNumberOfArgsForDataConstructorInPattern {
+    span: Span,
+    #[label(message = "{expected} argument(s) expected but {found} found")]
+    ident: Spanned<Ident>,
+    expected: usize,
+    found: usize,
+}
+
+#[derive(Report)]
+#[kind("error")]
+#[message("`{path}` is not a data-constructor")]
+struct NotADataConstructor {
+    span: Span,
+    #[label(message = "Pattern match must be on a data-constructor")]
+    path: Spanned<Path>,
+}
+
 /// AST pass for resolving symbols. Does not resolve record fields since that requires type
 /// information.
 #[derive(Debug)]
@@ -92,6 +112,7 @@ pub struct ResolveSymbols {
     diagnostics: Diagnostics,
 }
 
+#[derive(Clone, Copy)]
 struct StackState {
     bindings_stack: usize,
     types_stack: usize,
@@ -210,7 +231,7 @@ impl ResolveSymbols {
         }
     }
 
-    fn resolve_path_type(&self, ty: &Spanned<PathType>) -> ResolvedType {
+    fn resolve_path_type(&self, ty: &Spanned<Path>) -> ResolvedType {
         if ty.path.len() != 1 {
             todo!("modules");
         }
@@ -313,17 +334,13 @@ impl Visitor for ResolveSymbols {
             walk_let_item(self, item);
         }
         // Create binding for let item itself.
-        let let_binding = self.new_binding_scope(Binding {
-            ident: item.ident.as_ref().clone(),
-        });
+        let let_binding = self.new_binding_scope(Binding::new(item.ident.as_ref().clone()));
         self.bindings_map.let_items.insert(item, let_binding);
         // We want the environment to be restored to this state after the let item.
         let state = self.get_stack_state();
         // Create bindings for all params.
         for param in &item.params {
-            let param_binding = self.new_binding_scope(Binding {
-                ident: param.ident.as_ref().clone(),
-            });
+            let param_binding = self.new_binding_scope(Binding::new(param.ident.as_ref().clone()));
             self.bindings_map.params.insert(param, param_binding);
         }
         if !item.params.is_empty() {
@@ -343,9 +360,10 @@ impl Visitor for ResolveSymbols {
         // Create bindings for all ADT data constructors.
         if let TypeDef::Adt(adt) = &*item.def {
             for data_constructor in &adt.data_constructors {
-                let binding = self.new_binding_scope(Binding {
-                    ident: data_constructor.ident.as_ref().clone(),
-                });
+                let binding = self.new_binding_scope(Binding::new_data_constructor(
+                    data_constructor.ident.as_ref().clone(),
+                    data_constructor.of.len(),
+                ));
                 self.bindings_map
                     .data_constructors
                     .insert(data_constructor, binding);
@@ -429,9 +447,7 @@ impl Visitor for ResolveSymbols {
                 // We cannot access the binding inside the expression itself.
                 self.visit_expr(expr);
                 // Now we can add the binding.
-                let binding = self.new_binding_scope(Binding {
-                    ident: ident.as_ref().clone(),
-                });
+                let binding = self.new_binding_scope(Binding::new(ident.as_ref().clone()));
                 self.bindings_map.let_exprs.insert(let_expr, binding);
 
                 self.visit_expr(_in);
@@ -446,9 +462,8 @@ impl Visitor for ResolveSymbols {
                 let state = self.get_stack_state();
                 // Create bindings for all params.
                 for param in params {
-                    let binding = self.new_binding_scope(Binding {
-                        ident: param.ident.as_ref().clone(),
-                    });
+                    let binding =
+                        self.new_binding_scope(Binding::new(param.ident.as_ref().clone()));
                     self.bindings_map.lambda_params.insert(param, binding);
                 }
 
@@ -461,6 +476,24 @@ impl Visitor for ResolveSymbols {
                 // the type of the LHS.
                 self.visit_expr(lhs);
             }
+            Expr::If(Spanned(IfExpr { cond, then, else_ }, _)) => {
+                self.visit_expr(cond);
+                let state = self.get_stack_state();
+                self.visit_expr(then);
+                self.restore_stack_state(state);
+                self.visit_expr(else_);
+                self.restore_stack_state(state);
+            }
+            Expr::Match(Spanned(MatchExpr { matched, arms }, _)) => {
+                self.visit_expr(matched);
+                for arm in arms {
+                    let state = self.get_stack_state();
+                    // Create bindings for all match arms.
+                    self.visit_pattern(&arm.pattern);
+                    self.visit_expr(&arm.expr);
+                    self.restore_stack_state(state);
+                }
+            }
             Expr::Ident(Spanned(ident_expr @ IdentExpr { ident }, _)) => {
                 // Lookup the binding for this ident.
                 let resolved_binding = self.resolve_binding(&ident);
@@ -470,6 +503,73 @@ impl Visitor for ResolveSymbols {
             }
             _ => walk_expr(self, expr),
         }
+    }
+
+    fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
+        match &**pattern {
+            Pattern::Path(path) => {
+                match &path.path[..] {
+                    [ident] => {
+                        // Try to resolve this as a data-constructor. If not, then create a new
+                        // binding.
+                        match self.try_resolve_binding(ident) {
+                            Some(symbol) if self.bindings[symbol].is_data_constructor => {
+                                // Make sure that we have the right number of args.
+                                let expected = self.bindings[symbol].data_constructor_args;
+                                if expected != 0 {
+                                    self.diagnostics.add(
+                                        WrongNumberOfArgsForDataConstructorInPattern {
+                                            span: ident.span(),
+                                            ident: ident.clone(),
+                                            expected,
+                                            found: 0,
+                                        },
+                                    );
+                                }
+                                self.bindings_map
+                                    .pattern_tags
+                                    .insert(pattern, ResolvedBinding::Ok(symbol));
+                            }
+                            _ => {
+                                let binding =
+                                    self.new_binding_scope(Binding::new(ident.as_ref().clone()));
+                                self.bindings_map.pattern.insert(pattern, binding);
+                            }
+                        }
+                    }
+                    _ => todo!("modules"),
+                }
+            }
+            Pattern::Adt(adt) => match &adt.tag.path[..] {
+                [ident] => {
+                    let symbol = self.resolve_binding(ident);
+                    if let ResolvedBinding::Ok(symbol) = symbol {
+                        if !self.bindings[symbol].is_data_constructor {
+                            self.diagnostics.add(NotADataConstructor {
+                                span: ident.span(),
+                                path: adt.tag.clone(),
+                            })
+                        }
+                        // Make sure that we have the right number of args.
+                        let expected = self.bindings[symbol].data_constructor_args;
+                        if expected != 0 {
+                            self.diagnostics
+                                .add(WrongNumberOfArgsForDataConstructorInPattern {
+                                    span: ident.span(),
+                                    ident: ident.clone(),
+                                    expected,
+                                    found: 0,
+                                });
+                        }
+                    }
+                    self.bindings_map.pattern_tags.insert(pattern, symbol);
+                }
+                _ => todo!("modules"),
+            },
+            Pattern::Lit(_) => {}
+            Pattern::Err => {}
+        }
+        walk_pattern(self, pattern);
     }
 }
 
@@ -540,6 +640,18 @@ impl ResolvedType {
         }
     }
 
+    /// Uncurries a function.
+    pub fn uncurry_function(self) -> (Vec<Self>, Self) {
+        match self {
+            Self::Fn { arg, ret } => {
+                let (mut args, ret) = ret.uncurry_function();
+                args.push(*arg);
+                (args, ret)
+            }
+            _ => (Vec::new(), self),
+        }
+    }
+
     /// Create a new resolved type representing a curried constructed type.
     ///
     /// For example, a type `foo` with type params `'a`, `'b` would become the type `(foo 'a) 'b`.
@@ -572,8 +684,8 @@ impl ResolvedType {
 
     pub fn ident_of_constructed(&self) -> Option<TypeId> {
         match self {
-            ResolvedType::Ident(id) => Some(*id),
-            ResolvedType::Constructed {
+            Self::Ident(id) => Some(*id),
+            Self::Constructed {
                 constructor,
                 arg: _,
             } => constructor.ident_of_constructed(),
@@ -583,7 +695,7 @@ impl ResolvedType {
 
     fn num_of_constructed(&self) -> usize {
         match self {
-            ResolvedType::Constructed {
+            Self::Constructed {
                 constructor,
                 arg: _,
             } => constructor.num_of_constructed() + 1,
@@ -701,6 +813,10 @@ pub struct BindingsMap {
     pub let_exprs: NodeMap<LetExpr, BindingId>,
     /// Mapping from lambda params to their bindings.
     pub lambda_params: NodeMap<LambdaParam, BindingId>,
+    /// Mapping from pattern bindings to their bindings.
+    pub pattern: NodeMap<Pattern, BindingId>,
+    /// Mapping from pattern tags to their bindings.
+    pub pattern_tags: NodeMap<Pattern, ResolvedBinding>,
 }
 
 pub type BindingId = Idx<Binding>;
@@ -709,6 +825,29 @@ pub type BindingId = Idx<Binding>;
 #[derive(Debug)]
 pub struct Binding {
     pub ident: Ident,
+    pub is_data_constructor: bool,
+    /// The number of arguments that is expected for this data-constructor.
+    pub data_constructor_args: usize,
+}
+
+impl Binding {
+    /// Create a new binding that is __NOT__ a data-constructor.
+    pub fn new(ident: Ident) -> Self {
+        Self {
+            ident,
+            is_data_constructor: false,
+            data_constructor_args: 0, // TODO: do not have dummy field.
+        }
+    }
+
+    /// Create a new binding that is a data-constructor.
+    pub fn new_data_constructor(ident: Ident, args: usize) -> Self {
+        Self {
+            ident,
+            is_data_constructor: true,
+            data_constructor_args: args,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

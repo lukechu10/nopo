@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, HashMap};
 use la_arena::Arena;
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
-use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
+use nopo_parser::ast::{Expr, LetId, LetItem, LitExpr, Pattern, Root, TypeDef, TypeId, TypeItem};
 use nopo_parser::lexer::{BinOp, UnaryOp};
-use nopo_parser::visitor::{walk_expr, Visitor};
+use nopo_parser::visitor::{walk_expr, walk_pattern, Visitor};
 
 use crate::check_records::TypeCheckRecords;
 use crate::resolve::Binding;
@@ -62,6 +62,8 @@ pub struct GenerateConstraints {
     type_var_counter: u32,
     /// Keep track of all the types of all the expressions in this item.
     pub expr_types_map: NodeMap<Expr, ResolvedType>,
+    /// Keep track of all the types of the patterns in this item.
+    pub pattern_types_map: NodeMap<Pattern, ResolvedType>,
     /// A list of constraints.
     pub constraints: Vec<Constraint>,
 }
@@ -258,6 +260,30 @@ impl Visitor for UnifyTypes {
                 self.state.expr_types_map.insert(expr, c_ty);
                 return;
             }
+            Expr::Match(match_expr) => {
+                self.visit_expr(&match_expr.matched);
+                let c_matched = self.state.expr_types_map[&match_expr.matched].clone();
+                let c_ret_ty = spanned(match_expr.span(), self.state.new_type_var());
+                for arm in &match_expr.arms {
+                    self.visit_pattern(&arm.pattern);
+                    let c_pat_ty = self.state.pattern_types_map[&arm.pattern].clone();
+                    self.state.constraints.push(Constraint(
+                        spanned(arm.pattern.span(), c_pat_ty),
+                        spanned(match_expr.matched.span(), c_matched.clone()),
+                    ));
+                    self.visit_expr(&arm.expr);
+                    let c_arm_ty = spanned(
+                        arm.expr.span(),
+                        self.state.expr_types_map[&arm.expr].clone(),
+                    );
+                    self.state
+                        .constraints
+                        .push(Constraint(c_ret_ty.clone(), c_arm_ty));
+                }
+                // TODO: Constrain the type of the matched expression to the types of the patterns.
+                self.state.expr_types_map.insert(expr, c_ret_ty.unspan());
+                return;
+            }
             _ => (),
         }
 
@@ -283,7 +309,6 @@ impl Visitor for UnifyTypes {
             Expr::Block(_) => {
                 todo!("unify block expressions (should we even keep block expressions?)")
             }
-            Expr::Lambda(_) => unreachable!(),
             Expr::Tuple(tuple_expr) => ResolvedType::Tuple(
                 tuple_expr
                     .elements
@@ -363,11 +388,13 @@ impl Visitor for UnifyTypes {
                 }
             },
             Expr::Index(_) => todo!("unify index expressions"),
-            Expr::LitBool(_) => ResolvedType::Bool,
-            Expr::LitInt(_) => ResolvedType::Int,
-            Expr::LitFloat(_) => ResolvedType::Float,
-            Expr::LitStr(_) => ResolvedType::String,
-            Expr::LitChar(_) => ResolvedType::Char,
+            Expr::Lit(lit) => match &**lit {
+                LitExpr::Bool(_) => ResolvedType::Bool,
+                LitExpr::Int(_) => ResolvedType::Int,
+                LitExpr::Float(_) => ResolvedType::Float,
+                LitExpr::String(_) => ResolvedType::String,
+                LitExpr::Char(_) => ResolvedType::Char,
+            },
             Expr::If(if_expr) => {
                 let c_cond_ty = self.state.expr_types_map[&if_expr.cond].clone();
                 self.state.constraints.push(Constraint(
@@ -396,9 +423,59 @@ impl Visitor for UnifyTypes {
             Expr::Loop(_) => todo!(),
             Expr::Return(_) => todo!(),
             Expr::Let(_) => unreachable!(),
+            Expr::Lambda(_) => unreachable!(),
+            Expr::Match(_) => unreachable!(),
             Expr::Err => unreachable!(),
         };
         self.state.expr_types_map.insert(expr, c_ty);
+    }
+
+    fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
+        walk_pattern(self, pattern);
+        let c_ty = match &**pattern {
+            Pattern::Path(_) => {
+                if let Some(symbol) = self.bindings_map.pattern_tags.get(pattern) {
+                    if let ResolvedBinding::Ok(symbol) = symbol {
+                        let c_fn_ty = self.binding_types_map[symbol].clone();
+                        c_fn_ty.uncurry_function().1
+                    } else {
+                        self.state.new_type_var()
+                    }
+                } else {
+                    let binding = self.bindings_map.pattern[pattern];
+                    let c_ty = self.state.new_type_var();
+                    self.binding_types_map.insert(binding, c_ty.clone());
+                    c_ty
+                }
+            }
+            Pattern::Adt(adt) => {
+                let symbol = &self.bindings_map.pattern_tags[pattern];
+                if let ResolvedBinding::Ok(symbol) = symbol {
+                    let c_fn_ty = self.binding_types_map[symbol].clone();
+                    let (c_fn_args, c_ty) = c_fn_ty.uncurry_function();
+                    // Constrain the types of all the fields.
+                    for (sub_pattern, c_fn_arg) in adt.of.iter().zip(c_fn_args) {
+                        let c_sub_pattern = self.state.pattern_types_map[sub_pattern].clone();
+                        self.state.constraints.push(Constraint(
+                            spanned(sub_pattern.span(), c_sub_pattern),
+                            spanned(sub_pattern.span(), c_fn_arg),
+                        ));
+                    }
+                    c_ty
+                } else {
+                    self.state.new_type_var()
+                }
+            }
+            Pattern::Lit(lit) => match &**lit {
+                LitExpr::Bool(_) => ResolvedType::Bool,
+                LitExpr::Int(_) => ResolvedType::Int,
+                LitExpr::Float(_) => ResolvedType::Float,
+                LitExpr::String(_) => ResolvedType::String,
+                LitExpr::Char(_) => ResolvedType::Char,
+            },
+            Pattern::Err => self.state.new_type_var(),
+        };
+        self.state.pattern_types_map.insert(pattern, c_ty);
     }
 }
 

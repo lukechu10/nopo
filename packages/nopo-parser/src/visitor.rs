@@ -7,14 +7,20 @@ pub trait Visitor {
         walk_expr(self, expr)
     }
 
+    fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
+        walk_pattern(self, pattern)
+    }
+
     fn visit_type(&mut self, _ty: &Spanned<Type>) {}
 
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
         walk_let_item(self, item)
     }
+
     fn visit_type_item(&mut self, _idx: TypeId, item: &Spanned<TypeItem>) {
         walk_type_item(self, item)
     }
+
     fn visit_mod_item(&mut self, _item: &Spanned<ModItem>) {}
     fn visit_use_item(&mut self, _item: &Spanned<UseItem>) {}
 
@@ -51,15 +57,18 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
             visitor.visit_expr(lhs);
             visitor.visit_expr(index);
         }
-        Expr::LitBool(_) => {}
-        Expr::LitInt(_) => {}
-        Expr::LitFloat(_) => {}
-        Expr::LitStr(_) => {}
-        Expr::LitChar(_) => {}
+        Expr::Lit(_) => {}
         Expr::If(Spanned(IfExpr { cond, then, else_ }, _)) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(then);
             visitor.visit_expr(else_);
+        }
+        Expr::Match(Spanned(MatchExpr { matched, arms }, _)) => {
+            visitor.visit_expr(matched);
+            for arm in arms {
+                visitor.visit_pattern(&arm.pattern);
+                visitor.visit_expr(&arm.expr);
+            }
         }
         Expr::While(Spanned(WhileExpr { cond, body }, _)) => {
             visitor.visit_expr(cond);
@@ -94,6 +103,19 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
             visitor.visit_expr(_in);
         }
         Expr::Err => {}
+    }
+}
+
+pub fn walk_pattern<T: Visitor + ?Sized>(visitor: &mut T, pattern: &Pattern) {
+    match pattern {
+        Pattern::Path(_) => {}
+        Pattern::Adt(adt) => {
+            for pat in &adt.of {
+                visitor.visit_pattern(pat);
+            }
+        }
+        Pattern::Lit(_) => {}
+        Pattern::Err => {}
     }
 }
 

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use la_arena::ArenaMap;
 use nopo_diagnostics::span::Spanned;
-use nopo_parser::ast::{Expr, LetId, LetItem, Root, TypeDef, TypeId, TypeItem};
+use nopo_parser::ast::{Expr, LetId, LetItem, LitExpr, Root, TypeDef, TypeId, TypeItem};
 use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_root, Visitor};
 use nopo_passes::resolve::{BindingId, BindingsMap, ResolvedType, TypesMap};
@@ -369,15 +369,17 @@ impl Visitor for Codegen {
                 }
             },
             Expr::Index(_) => todo!(),
-            Expr::LitBool(value) => self.chunk().write(LoadBool(*value)),
-            Expr::LitInt(value) => self.chunk().write(LoadInt(*value)),
-            Expr::LitFloat(_value) => todo!("load float"),
-            Expr::LitStr(value) => {
-                let value = Value::Object(Rc::new(Object::String(value.clone())));
-                let str_const = self.chunk().write_const(value);
-                self.chunk().write(LoadConst(str_const));
-            }
-            Expr::LitChar(value) => self.chunk().write(LoadChar(*value)),
+            Expr::Lit(lit) => match &**lit {
+                LitExpr::Bool(value) => self.chunk().write(LoadBool(*value)),
+                LitExpr::Int(value) => self.chunk().write(LoadInt(*value)),
+                LitExpr::Float(_value) => todo!("load float"),
+                LitExpr::String(value) => {
+                    let value = Value::Object(Rc::new(Object::String(value.clone())));
+                    let str_const = self.chunk().write_const(value);
+                    self.chunk().write(LoadConst(str_const));
+                }
+                LitExpr::Char(value) => self.chunk().write(LoadChar(*value)),
+            },
             Expr::If(if_expr) => {
                 self.visit_expr(&if_expr.cond);
                 let then_jump = self.chunk().write_get_offset(CJump(0));
@@ -387,6 +389,7 @@ impl Visitor for Codegen {
                 self.visit_expr(&if_expr.then);
                 self.chunk().patch_jump(else_jump);
             }
+            Expr::Match(_) => todo!("codegen match"),
             Expr::While(_) => todo!(),
             Expr::For(_) => todo!(),
             Expr::Loop(_) => todo!(),

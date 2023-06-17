@@ -57,6 +57,15 @@ struct ExpectedTypeDef {
 
 #[derive(Report)]
 #[kind("error")]
+#[message("expected a pattern, found {unexpected}")]
+struct ExpectedPattern {
+    span: Span,
+    #[label(message = "unexpected token")]
+    unexpected: Spanned<Token>,
+}
+
+#[derive(Report)]
+#[kind("error")]
 #[message("invalid char literal")]
 struct InvalidCharLiteral {
     span: Span,
@@ -77,7 +86,6 @@ pub struct Parser {
     file_id: FileId,
     diagnostics: Diagnostics,
 }
-
 
 /// A temporary struct used to store the start of a span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,7 +527,7 @@ impl Parser {
                 }
             }
             Token::Ident(_) => {
-                let path = self.parse_path_type();
+                let path = self.parse_path();
                 self.finish(start, Type::Path(path))
             }
             Token::Prime => {
@@ -586,7 +594,7 @@ impl Parser {
         lhs
     }
 
-    pub fn parse_path_type(&mut self) -> Spanned<PathType> {
+    pub fn parse_path(&mut self) -> Spanned<Path> {
         let start = self.start();
         let initial = self.parse_ident();
         let mut path = vec![initial];
@@ -595,7 +603,7 @@ impl Parser {
             path.push(self.parse_ident());
         }
 
-        self.finish(start, PathType { path })
+        self.finish(start, Path { path })
     }
 
     pub fn parse_expr(&mut self) -> Spanned<Expr> {
@@ -619,9 +627,10 @@ impl Parser {
             | Token::LitFalse
             | Token::LitFloat(_)
             | Token::LitInt(_)
-            | Token::LitStr(_)
+            | Token::LitString(_)
             | Token::LitChar(_)
             | Token::KwIf
+            | Token::KwMatch
             | Token::KwFor
             | Token::KwWhile
             | Token::KwLoop
@@ -656,47 +665,22 @@ impl Parser {
                 self.finish(start, Expr::Lambda(expr))
             }
             Token::LParen => self.parse_tuple_expr(),
-            Token::LitTrue => {
-                let _ = self.get_next();
-                self.finish(start, Expr::LitBool(true))
-            }
-            Token::LitFalse => {
-                let _ = self.get_next();
-                self.finish(start, Expr::LitBool(false))
-            }
-            Token::LitInt(int) => {
-                let int = *int;
-                let _ = self.get_next();
-                self.finish(start, Expr::LitInt(int))
-            }
-            Token::LitFloat(float) => {
-                let float = float.clone();
-                let _ = self.get_next();
-                self.finish(start, Expr::LitFloat(float))
-            }
-            Token::LitStr(str) => {
-                let str = str.clone();
-                let _ = self.get_next();
-                self.finish(start, Expr::LitStr(str))
-            }
-            Token::LitChar(str) => {
-                let str = str.clone();
-                let _ = self.get_next();
-                let mut chars = str.chars(); // TODO: escape codes
-                if let Some(char) = chars.next() {
-                    if chars.next().is_none() {
-                        return self.finish(start, Expr::LitChar(char));
-                    }
-                }
-                self.diagnostics.add(InvalidCharLiteral {
-                    span: self.end(start),
-                    char: self.finish(start, str),
-                });
-                self.finish(start, Expr::Err)
-            }
+            Token::LitTrue
+            | Token::LitFalse
+            | Token::LitInt(_)
+            | Token::LitFloat(_)
+            | Token::LitString(_)
+            | Token::LitChar(_) => match self.parse_lit_expr() {
+                Some(lit) => self.finish(start, Expr::Lit(lit)),
+                None => self.finish(start, Expr::Err),
+            },
             Token::KwIf => {
                 let expr = self.parse_if_expr();
                 self.finish(start, Expr::If(expr))
+            }
+            Token::KwMatch => {
+                let expr = self.parse_match_expr();
+                self.finish(start, Expr::Match(expr))
             }
             Token::KwFor => {
                 let expr = self.parse_for_expr();
@@ -809,6 +793,37 @@ impl Parser {
         lhs
     }
 
+    /// Parse a literal. Panics if the next token is not a literal token.
+    pub fn parse_lit_expr(&mut self) -> Option<Spanned<LitExpr>> {
+        let start = self.start();
+        let lit = match self.peek_next() {
+            Token::LitTrue => Some(self.finish(start, LitExpr::Bool(true))),
+            Token::LitFalse => Some(self.finish(start, LitExpr::Bool(false))),
+            Token::LitInt(value) => Some(self.finish(start, LitExpr::Int(*value))),
+            Token::LitFloat(value) => Some(self.finish(start, LitExpr::Float(value.clone()))),
+            Token::LitString(value) => {
+                let value = value.clone();
+                Some(self.finish(start, LitExpr::String(value)))
+            }
+            Token::LitChar(value) => {
+                let chars = value.chars().collect::<Vec<_>>(); // TODO: escape codes
+                match chars[..] {
+                    [char] => Some(self.finish(start, LitExpr::Char(char))),
+                    _ => {
+                        self.diagnostics.add(InvalidCharLiteral {
+                            span: self.end(start),
+                            char: self.finish(start, value.clone()),
+                        });
+                        None
+                    }
+                }
+            }
+            _ => unreachable!(),
+        };
+        let _ = self.get_next();
+        lit
+    }
+
     pub fn parse_block_expr(&mut self) -> Spanned<BlockExpr> {
         let start = self.start();
         self.expect(Token::LBrace);
@@ -908,6 +923,33 @@ impl Parser {
         )
     }
 
+    pub fn parse_match_expr(&mut self) -> Spanned<MatchExpr> {
+        let start = self.start();
+        self.expect(Token::KwMatch);
+        let matched = self.parse_expr();
+        self.expect(Token::KwWith);
+        let mut arms = Vec::new();
+        while self.peek_next() == &Token::Or {
+            arms.push(self.parse_match_arm());
+        }
+        self.finish(
+            start,
+            MatchExpr {
+                matched: Box::new(matched),
+                arms,
+            },
+        )
+    }
+
+    pub fn parse_match_arm(&mut self) -> Spanned<MatchArm> {
+        let start = self.start();
+        self.expect(Token::Or);
+        let pattern = self.parse_pattern();
+        self.expect(Token::RArrow);
+        let expr = self.parse_expr();
+        self.finish(start, MatchArm { pattern, expr })
+    }
+
     pub fn parse_while_expr(&mut self) -> Spanned<WhileExpr> {
         let start = self.start();
         self.expect(Token::KwWhile);
@@ -1004,6 +1046,60 @@ impl Parser {
         self.expect(Token::KwUse);
         let path = self.parse_ident();
         self.finish(start, UseItem { attrs, vis, path })
+    }
+
+    pub fn peek_is_pattern(&mut self) -> bool {
+        matches!(
+            self.peek_next(),
+            Token::Ident(_)
+                | Token::LParen
+                | Token::LitTrue
+                | Token::LitFalse
+                | Token::LitInt(_)
+                | Token::LitFloat(_)
+                | Token::LitString(_)
+                | Token::LitChar(_)
+        )
+    }
+
+    pub fn parse_pattern(&mut self) -> Spanned<Pattern> {
+        let start = self.start();
+        match self.peek_next() {
+            Token::Ident(_) => {
+                let path = self.parse_path();
+                self.finish(start, Pattern::Path(path))
+            }
+            Token::LParen => {
+                self.expect(Token::LParen);
+                let tag = self.parse_path();
+                let mut of = Vec::new();
+                while self.peek_is_pattern() {
+                    of.push(self.parse_pattern());
+                }
+                self.expect(Token::RParen);
+                self.finish(
+                    start,
+                    Pattern::Adt(self.finish(start, AdtPattern { tag, of })),
+                )
+            }
+            Token::LitTrue
+            | Token::LitFalse
+            | Token::LitInt(_)
+            | Token::LitFloat(_)
+            | Token::LitString(_)
+            | Token::LitChar(_) => match self.parse_lit_expr() {
+                Some(lit) => self.finish(start, Pattern::Lit(lit)),
+                None => self.finish(start, Pattern::Err),
+            },
+            _ => {
+                self.diagnostics.add(ExpectedPattern {
+                    span: self.peek_span(),
+                    unexpected: spanned(self.peek_span(), self.peek_next().clone()),
+                });
+                let _ = self.get_next(); // TODO: better error recovery
+                self.finish(start, Pattern::Err)
+            }
+        }
     }
 
     /// Try to parse an identifier. Will consume a token even in the case of mismatch.

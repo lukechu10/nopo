@@ -49,8 +49,10 @@ type list 'a = Nil | Cons of 'a (list 'a)
                             ident: (5..6) "x",
                             params: [],
                             ret_ty: None,
-                            expr: (9..10) LitInt(
-                                1,
+                            expr: (9..10) Lit(
+                                (9..8) Int(
+                                    1,
+                                ),
                             ),
                         },
                         (11..31) LetItem {
@@ -68,8 +70,10 @@ type list 'a = Nil | Cons of 'a (list 'a)
                             ret_ty: None,
                             expr: (26..31) Binary(
                                 (26..31) BinaryExpr {
-                                    lhs: (26..27) LitInt(
-                                        2,
+                                    lhs: (26..27) Lit(
+                                        (26..25) Int(
+                                            2,
+                                        ),
                                     ),
                                     op: (28..29) Mul,
                                     rhs: (30..31) Ident(
@@ -114,7 +118,7 @@ type list 'a = Nil | Cons of 'a (list 'a)
                                                 (65..72) Constructed(
                                                     (65..72) ConstructedType {
                                                         constructor: (65..69) Path(
-                                                            (65..69) PathType {
+                                                            (65..69) Path {
                                                                 path: [
                                                                     (65..69) "list",
                                                                 ],
@@ -158,48 +162,60 @@ fn test_parse_literals() {
     check_expr(
         r#"true"#,
         expect![[r#"
-            (0..4) LitBool(
-                true,
+            (0..4) Lit(
+                (0..0) Bool(
+                    true,
+                ),
             )
         "#]],
     );
     check_expr(
         r#"false"#,
         expect![[r#"
-            (0..5) LitBool(
-                false,
+            (0..5) Lit(
+                (0..0) Bool(
+                    false,
+                ),
             )
         "#]],
     );
     check_expr(
         r#"1"#,
         expect![[r#"
-            (0..1) LitInt(
-                1,
+            (0..1) Lit(
+                (0..0) Int(
+                    1,
+                ),
             )
         "#]],
     );
     check_expr(
         r#"1.23"#,
         expect![[r#"
-            (0..4) LitFloat(
-                "1.23",
+            (0..4) Lit(
+                (0..0) Float(
+                    "1.23",
+                ),
             )
         "#]],
     );
     check_expr(
         r#""Hello, World!""#,
         expect![[r#"
-            (0..15) LitStr(
-                "Hello, World!",
+            (0..15) Lit(
+                (0..0) String(
+                    "Hello, World!",
+                ),
             )
         "#]],
     );
     check_expr(
         r#"'a'"#,
         expect![[r#"
-            (0..3) LitChar(
-                'a',
+            (0..3) Lit(
+                (0..0) Char(
+                    'a',
+                ),
             )
         "#]],
     );
@@ -212,12 +228,16 @@ fn test_parse_bin_expr() {
         expect![[r#"
             (0..5) Binary(
                 (0..5) BinaryExpr {
-                    lhs: (0..1) LitInt(
-                        1,
+                    lhs: (0..1) Lit(
+                        (0..0) Int(
+                            1,
+                        ),
                     ),
                     op: (2..3) Plus,
-                    rhs: (4..5) LitInt(
-                        1,
+                    rhs: (4..5) Lit(
+                        (4..3) Int(
+                            1,
+                        ),
                     ),
                 },
             )
@@ -230,18 +250,24 @@ fn test_parse_bin_expr() {
                 (0..9) BinaryExpr {
                     lhs: (0..5) Binary(
                         (0..5) BinaryExpr {
-                            lhs: (0..1) LitInt(
-                                1,
+                            lhs: (0..1) Lit(
+                                (0..0) Int(
+                                    1,
+                                ),
                             ),
                             op: (2..3) Plus,
-                            rhs: (4..5) LitInt(
-                                2,
+                            rhs: (4..5) Lit(
+                                (4..3) Int(
+                                    2,
+                                ),
                             ),
                         },
                     ),
                     op: (6..7) Plus,
-                    rhs: (8..9) LitInt(
-                        3,
+                    rhs: (8..9) Lit(
+                        (8..7) Int(
+                            3,
+                        ),
                     ),
                 },
             )
@@ -252,18 +278,24 @@ fn test_parse_bin_expr() {
         expect![[r#"
             (0..9) Binary(
                 (0..9) BinaryExpr {
-                    lhs: (0..1) LitInt(
-                        1,
+                    lhs: (0..1) Lit(
+                        (0..0) Int(
+                            1,
+                        ),
                     ),
                     op: (2..3) Plus,
                     rhs: (4..9) Binary(
                         (4..9) BinaryExpr {
-                            lhs: (4..5) LitInt(
-                                2,
+                            lhs: (4..5) Lit(
+                                (4..3) Int(
+                                    2,
+                                ),
                             ),
                             op: (6..7) Mul,
-                            rhs: (8..9) LitInt(
-                                3,
+                            rhs: (8..9) Lit(
+                                (8..7) Int(
+                                    3,
+                                ),
                             ),
                         },
                     ),
@@ -278,18 +310,24 @@ fn test_parse_bin_expr() {
                 (0..11) BinaryExpr {
                     lhs: (1..6) Binary(
                         (1..6) BinaryExpr {
-                            lhs: (1..2) LitInt(
-                                1,
+                            lhs: (1..2) Lit(
+                                (1..1) Int(
+                                    1,
+                                ),
                             ),
                             op: (3..4) Plus,
-                            rhs: (5..6) LitInt(
-                                2,
+                            rhs: (5..6) Lit(
+                                (5..4) Int(
+                                    2,
+                                ),
                             ),
                         },
                     ),
                     op: (8..9) Mul,
-                    rhs: (10..11) LitInt(
-                        3,
+                    rhs: (10..11) Lit(
+                        (10..9) Int(
+                            3,
+                        ),
                     ),
                 },
             )

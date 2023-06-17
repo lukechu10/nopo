@@ -116,7 +116,7 @@ pub struct RecordField {
 /// A reference to a type.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Type {
-    Path(Spanned<PathType>),
+    Path(Spanned<Path>),
     Fn(Spanned<FnType>),
     Tuple(Spanned<TupleType>),
     /// The result of the application of a type constructor.
@@ -126,7 +126,7 @@ pub enum Type {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct PathType {
+pub struct Path {
     pub path: Vec<Spanned<Ident>>,
 }
 
@@ -161,14 +161,10 @@ pub enum Expr {
 
     Index(Spanned<IndexExpr>),
 
-    LitBool(bool),
-    LitInt(i64),
-    /// The float is stored as a string representation.
-    LitFloat(String),
-    LitStr(String),
-    LitChar(char),
+    Lit(Spanned<LitExpr>),
 
     If(Spanned<IfExpr>),
+    Match(Spanned<MatchExpr>),
     While(Spanned<WhileExpr>),
     For(Spanned<ForExpr>),
     Loop(Spanned<LoopExpr>),
@@ -238,10 +234,32 @@ pub struct IndexExpr {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum LitExpr {
+    Bool(bool),
+    Int(i64),
+    /// The float is stored as a string representation.
+    Float(String),
+    String(String),
+    Char(char),
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct IfExpr {
     pub cond: Box<Spanned<Expr>>,
     pub then: Box<Spanned<Expr>>,
     pub else_: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MatchExpr {
+    pub matched: Box<Spanned<Expr>>,
+    pub arms: Vec<Spanned<MatchArm>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: Spanned<Pattern>,
+    pub expr: Spanned<Expr>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -273,6 +291,20 @@ pub struct LetExpr {
     pub ret_ty: Option<Spanned<Type>>,
     pub expr: Box<Spanned<Expr>>,
     pub _in: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pattern {
+    Path(Spanned<Path>),
+    Adt(Spanned<AdtPattern>),
+    Lit(Spanned<LitExpr>),
+    Err,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AdtPattern {
+    pub tag: Spanned<Path>,
+    pub of: Vec<Spanned<Pattern>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -327,11 +359,21 @@ impl fmt::Debug for Ident {
     }
 }
 
+impl fmt::Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.path[0])?;
+        for segment in &self.path[1..] {
+            write!(f, ".{segment}")?;
+        }
+        Ok(())
+    }
+}
+
 // TODO: precedence aware pretty-printing
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Path(Spanned(PathType { path }, _)) => {
+            Type::Path(Spanned(Path { path }, _)) => {
                 for ident in path {
                     write!(f, "{ident}")?;
                 }
