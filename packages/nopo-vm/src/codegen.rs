@@ -512,19 +512,31 @@ impl Visitor for Codegen {
 
                 self.chunk().patch_jump(jump_true);
                 self.chunk().write(Dup);
+                let mut conjuncts = 0;
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
-                    self.chunk().write(GetField(field as u32));
-                    self.visit_pattern(sub_pattern);
-                    // Discard field.
-                    self.chunk().write(Slide(1));
-                    // Get the original value back on top (it's under `field` number of bools)
-                    self.chunk().write(DupRel(field as u32 + 1));
+                    // If the sub-pattern is just a binding, don't even bother checking if it
+                    // matches since it matches trivially.
+                    if self.bindings_map.pattern.get(sub_pattern).is_none() {
+                        conjuncts += 1;
+                        self.chunk().write(GetField(field as u32));
+                        self.visit_pattern(sub_pattern);
+                        // Discard field.
+                        self.chunk().write(Slide(1));
+                        // Get the original value back on top (it's under `field` number of bools)
+                        self.chunk().write(DupRel(conjuncts));
+                    }
                 }
                 self.chunk().write(Pop);
                 // Get rid of the original value now.
                 // Only match if the conjunction of all sub patterns match.
-                for _ in 0..adt.of.len() - 1 {
-                    self.chunk().write(BoolAnd);
+                match conjuncts {
+                    0 => self.chunk().write(LoadBool(true)),
+                    1 => {}
+                    n => {
+                        for _ in 0..n - 1 {
+                            self.chunk().write(BoolAnd);
+                        }
+                    }
                 }
 
                 self.chunk().patch_jump(jump_end);
