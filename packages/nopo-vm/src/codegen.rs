@@ -427,7 +427,6 @@ impl Visitor for Codegen {
             Expr::Match(match_expr) => {
                 let state = self.offset_state();
                 self.visit_expr(&match_expr.matched);
-                self.inc_offset(); // For the matched expression.
 
                 let mut jumps = Vec::new();
 
@@ -569,12 +568,12 @@ impl Codegen {
             }
             Pattern::Adt(adt) => {
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
+                    self.inc_offset();
                     self.chunk().write(LoadLocal(offset));
                     self.chunk().write(GetField(field as u32));
 
                     self.visit_pattern_bindings(sub_pattern);
                 }
-                self.chunk().write(Pop);
             }
             Pattern::Lit(_) => {}
             Pattern::Err => unreachable!(),

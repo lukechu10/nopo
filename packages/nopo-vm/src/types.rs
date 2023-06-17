@@ -261,7 +261,7 @@ impl fmt::Display for Value {
                 }
                 Object::Adt(tag, values) => {
                     // FIXME: type-aware printing.
-                    write!(f, "<adt tag={tag}> (")?;
+                    write!(f, "<tag={tag}> (")?;
                     if let Some(first) = values.first() {
                         write!(f, "{first}")?;
                     }
