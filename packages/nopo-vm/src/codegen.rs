@@ -102,12 +102,22 @@ impl Codegen {
         offset
     }
 
-    /// Insert a new entry into the offset map.
+    /// Insert a new entry into the offset map. Increments next_offset.
     fn new_binding_offset(&mut self, id: BindingId, kind: BindingKind) {
         let offset = self.inc_offset();
         let binding_data = BindingOffset {
             kind,
             offset,
+            chunks_depth: self.chunks.len() - 1,
+        };
+        self.offset_map.insert(id, binding_data);
+    }
+
+    /// Insert a new entry into the offset map without incrementing next_offset.
+    fn new_binding_no_offset(&mut self, id: BindingId, kind: BindingKind) {
+        let binding_data = BindingOffset {
+            kind,
+            offset: self.chunks.last().unwrap().next_offset,
             chunks_depth: self.chunks.len() - 1,
         };
         self.offset_map.insert(id, binding_data);
@@ -296,7 +306,7 @@ impl Visitor for Codegen {
                 });
             }
             Expr::Tuple(tuple_expr) => {
-                for expr in tuple_expr.elements.iter().rev() {
+                for expr in &tuple_expr.elements {
                     self.visit_expr(expr);
                 }
                 self.chunk().write(Instr::MakeTuple {
@@ -415,8 +425,12 @@ impl Visitor for Codegen {
                 self.chunk().patch_jump(else_jump);
             }
             Expr::Match(match_expr) => {
+                let state = self.offset_state();
                 self.visit_expr(&match_expr.matched);
+                self.inc_offset(); // For the matched expression.
+
                 let mut jumps = Vec::new();
+
                 // Codegen for matching the pattern.
                 for arm in &match_expr.arms {
                     self.visit_pattern(&arm.pattern);
@@ -444,6 +458,9 @@ impl Visitor for Codegen {
                 for jump_end in jumps_end {
                     self.chunk().patch_jump(jump_end);
                 }
+                // Get rid of matched expression.
+                self.chunk().write(Slide(1));
+                self.restore_state(state);
             }
             Expr::While(_) => todo!(),
             Expr::For(_) => todo!(),
@@ -536,7 +553,9 @@ impl Visitor for Codegen {
 
 impl Codegen {
     // Create the bindings used in this pattern.
+    // Does not remove the original top value of the stack.
     fn visit_pattern_bindings(&mut self, pattern: &Spanned<Pattern>) {
+        let offset = self.offset_state().next_offset - 1;
         match &**pattern {
             Pattern::Path(_) => {
                 if let Some(&binding) = self.bindings_map.pattern.get(pattern) {
@@ -545,18 +564,15 @@ impl Codegen {
                     } else {
                         BindingKind::Local
                     };
-                    self.new_binding_offset(binding, kind);
+                    self.new_binding_no_offset(binding, kind);
                 }
             }
             Pattern::Adt(adt) => {
-                self.chunk().write(Dup);
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
-                    if !matches!(&**sub_pattern, Pattern::Path(_)) {
-                        self.inc_offset(); // TODO: do not use up useless stack space.
-                    }
+                    self.chunk().write(LoadLocal(offset));
                     self.chunk().write(GetField(field as u32));
+
                     self.visit_pattern_bindings(sub_pattern);
-                    self.chunk().write(DupRel(field as u32 + 1));
                 }
                 self.chunk().write(Pop);
             }

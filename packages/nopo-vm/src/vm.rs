@@ -315,12 +315,14 @@ impl Vm {
                         )))));
                 }
                 Instr::MakeTuple { args } => {
-                    let values = (0..args).map(|_| self.pop()).collect::<Vec<_>>();
+                    let mut values = (0..args).map(|_| self.pop()).collect::<Vec<_>>();
+                    values.reverse();
                     self.stack
                         .push(Value::Object(Rc::new(Object::Tuple(values))));
                 }
                 Instr::MakeAdt { tag, args } => {
-                    let values = (0..args).map(|_| self.pop()).collect::<Vec<_>>();
+                    let mut values = (0..args).map(|_| self.pop()).collect::<Vec<_>>();
+                    values.reverse();
                     self.stack
                         .push(Value::Object(Rc::new(Object::Adt(tag, values))));
                 }
@@ -425,9 +427,14 @@ impl Drop for Vm {
     fn drop(&mut self) {
         if std::thread::panicking() {
             // VM has crashed. Print some debugging info.
-            eprintln!("VM Crashed");
-            eprintln!("Chunk name: {}", self.frame().closure.proto.chunk.name);
-            eprintln!("IP: {}", self.frame().ip);
+            eprintln!("== VM Crashed ==");
+            eprintln!("== Chunk name: {}", self.frame().closure.proto.chunk.name);
+            eprintln!("== IP: {}", self.frame().ip);
+            eprintln!("== FP: {}", self.frame().frame_pointer);
+            eprintln!("== STACK");
+            for (i, value) in self.stack.iter().enumerate() {
+                eprintln!("{i}: {value}");
+            }
         }
     }
 }
