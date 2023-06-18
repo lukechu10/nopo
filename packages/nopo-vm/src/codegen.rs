@@ -552,20 +552,15 @@ impl Codegen {
                     } else {
                         BindingKind::Local
                     };
-                    self.new_binding_at_top(binding, kind);
+                    let offset = self.current_offset();
+                    self.new_binding_at_pos(binding, kind, offset - 1);
                 }
             }
             Pattern::Adt(adt) => {
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
-                    let is_path = matches!(&**sub_pattern, Pattern::Path(_));
-                    if is_path {
-                        self.visit_pattern_bindings(sub_pattern);
-                    }
                     self.chunk().write(DupRel(field as u32));
                     self.chunk().write(GetField(field as u32));
-                    if !is_path {
-                        self.visit_pattern_bindings(sub_pattern);
-                    }
+                    self.visit_pattern_bindings(sub_pattern);
                 }
             }
             Pattern::Lit(_) => {}
