@@ -280,7 +280,6 @@ impl Visitor for UnifyTypes {
                         .constraints
                         .push(Constraint(c_ret_ty.clone(), c_arm_ty));
                 }
-                // TODO: Constrain the type of the matched expression to the types of the patterns.
                 self.state.expr_types_map.insert(expr, c_ret_ty.unspan());
                 return;
             }

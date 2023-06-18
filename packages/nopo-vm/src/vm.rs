@@ -19,7 +19,6 @@ pub struct CallFrame {
 pub struct Vm {
     pub stack: ValueArray,
     call_stack: Vec<CallFrame>,
-    upvalues: Vec<Rc<RefCell<UpValue>>>,
 }
 
 impl Vm {
@@ -33,7 +32,6 @@ impl Vm {
         Self {
             stack: Vec::new(),
             call_stack: vec![frame],
-            upvalues: Vec::new(),
         }
     }
 
@@ -63,10 +61,6 @@ impl Vm {
         let ret_value = self.pop();
         let frame = self.call_stack.pop().unwrap();
 
-        for idx in frame.frame_pointer..self.stack.len() {
-            self.close_upvalues(idx);
-        }
-
         // Cleanup locals created inside function.
         if frame.is_call_global {
             self.stack.truncate(frame.frame_pointer);
@@ -74,22 +68,6 @@ impl Vm {
             self.stack.truncate(frame.frame_pointer - 1);
         }
         self.stack.push(ret_value);
-    }
-
-    fn resolve_upvalue_into_value(&self, upvalue: &UpValue) -> Value {
-        match upvalue {
-            UpValue::Open(idx) => self.stack[*idx as usize].clone(),
-            UpValue::Closed(value) => value.clone(),
-        }
-    }
-
-    fn close_upvalues(&self, idx: usize) {
-        let value = &self.stack[idx];
-        for upvalue in &self.upvalues {
-            if upvalue.borrow().is_open_upvalue_with_idx(idx as u32) {
-                upvalue.replace(UpValue::Closed(value.clone()));
-            }
-        }
     }
 
     fn calli(&mut self, args: u32) {
@@ -103,9 +81,9 @@ impl Vm {
             let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
             let mut upvalues = (0..args)
                 .map(|_| self.pop())
-                .map(|x| Rc::new(RefCell::new(UpValue::Closed(x))))
+                .map(|x| Rc::new(RefCell::new(UpValue(x))))
                 .collect::<Vec<_>>();
-            upvalues.push(Rc::new(RefCell::new(UpValue::Closed(self.pop())))); // This should be the closure.
+            upvalues.push(Rc::new(RefCell::new(UpValue(self.pop())))); // This should be the closure.
             chunk.write(Instr::LoadUpValue(lambda_arity));
             for i in 0..args {
                 chunk.write(Instr::LoadUpValue(i));
@@ -159,7 +137,7 @@ impl Vm {
             let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
             let upvalues = (0..args)
                 .map(|_| self.pop())
-                .map(|x| Rc::new(RefCell::new(UpValue::Closed(x))))
+                .map(|x| Rc::new(RefCell::new(UpValue(x))))
                 .collect::<Vec<_>>();
             for i in 0..args {
                 chunk.write(Instr::LoadUpValue(i));
@@ -263,8 +241,7 @@ impl Vm {
                 Instr::LoadGlobal(idx) => self.stack.push(self.stack[idx as usize].clone()),
                 Instr::LoadUpValue(idx) => {
                     let upvalue = self.frame().closure.upvalues[idx as usize].clone();
-                    let value = self.resolve_upvalue_into_value(&upvalue.borrow());
-                    self.stack.push(value);
+                    self.stack.push(upvalue.borrow().0.clone());
                 }
                 Instr::Dup => {
                     self.stack.push(self.stack.last().unwrap().clone());
@@ -299,9 +276,8 @@ impl Vm {
                     continue;
                 }
                 Instr::MakeClosure { idx, upvalues } => {
-                    // TODO: use open upvalues.
                     let upvalues = (0..upvalues)
-                        .map(|_| Rc::new(RefCell::new(UpValue::Closed(self.pop()))))
+                        .map(|_| Rc::new(RefCell::new(UpValue(self.pop()))))
                         .collect::<Vec<_>>();
                     let proto = self.frame().closure.proto.chunk.consts[idx as usize]
                         .as_object()

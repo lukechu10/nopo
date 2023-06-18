@@ -60,7 +60,7 @@ impl fmt::Display for InstrOffset {
             }
             Instr::MakeClosure { idx, upvalues } => write!(
                 f,
-                "{:<15} args: {idx}, upvalues: {upvalues}",
+                "{:<15} idx: {idx}, upvalues: {upvalues}",
                 "make.closure"
             ),
             Instr::MakeTuple { args } => write!(f, "{:<15} args: {args}", "make.tuple"),

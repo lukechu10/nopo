@@ -362,20 +362,9 @@ impl fmt::Display for Value {
     }
 }
 
+/// Represents a captured value in a closure.
 #[derive(Debug, Clone)]
-pub enum UpValue {
-    Open(VmIndex),
-    Closed(Value),
-}
-
-impl UpValue {
-    pub fn is_open_upvalue_with_idx(&self, idx: VmIndex) -> bool {
-        match self {
-            Self::Open(x) => *x == idx,
-            Self::Closed(_) => false,
-        }
-    }
-}
+pub struct UpValue(pub Value);
 
 #[derive(Debug)]
 pub enum Object {

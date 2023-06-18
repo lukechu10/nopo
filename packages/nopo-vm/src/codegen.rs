@@ -12,8 +12,8 @@ use nopo_passes::resolve::{Binding, BindingId, BindingsMap, ResolvedType, TypesM
 use nopo_passes::unify::UnifyTypes;
 
 use crate::print::print_chunk;
-use crate::types::Instr::{self, *};
-use crate::types::{Chunk, ChunkBuilder, ObjClosure, ObjProto, Object, Value, VmIndex};
+use crate::types::Instr::*;
+use crate::types::{Chunk, ChunkBuilder, Instr, ObjClosure, ObjProto, Object, Value, VmIndex};
 
 #[derive(Debug)]
 pub struct Codegen {
