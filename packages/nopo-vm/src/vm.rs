@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::print::print_chunk;
-use crate::types::{Chunk, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray};
+use crate::types::{ChunkBuilder, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray};
 
 #[derive(Debug)]
 pub struct CallFrame {
@@ -99,13 +99,13 @@ impl Vm {
         if callee_arity > args {
             // Generate a lambda on the fly. Capture all arguments as upvalues. Capture the
             // original closure as the lambda_arity-th upvalue.
-            let mut chunk = Chunk::new("<partial>".to_string());
+            let lambda_arity = callee_arity - args;
+            let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
             let mut upvalues = (0..args)
                 .map(|_| self.pop())
                 .map(|x| Rc::new(RefCell::new(UpValue::Closed(x))))
                 .collect::<Vec<_>>();
             upvalues.push(Rc::new(RefCell::new(UpValue::Closed(self.pop())))); // This should be the closure.
-            let lambda_arity = callee_arity - args;
             chunk.write(Instr::LoadUpValue(lambda_arity));
             for i in 0..args {
                 chunk.write(Instr::LoadUpValue(i));
@@ -114,6 +114,7 @@ impl Vm {
                 chunk.write(Instr::LoadLocal(i));
             }
             chunk.write(Instr::Calli { args: callee_arity });
+            let chunk = chunk.into_chunk();
             print_chunk(&chunk, &mut std::io::stderr()).unwrap();
             let closure = ObjClosure {
                 proto: ObjProto {
@@ -154,12 +155,12 @@ impl Vm {
         let callee_arity = closure.proto.arity;
         if callee_arity > args {
             // Generate a lambda on the fly. Capture all arguments as upvalues.
-            let mut chunk = Chunk::new("<partial>".to_string());
+            let lambda_arity = callee_arity - args;
+            let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
             let upvalues = (0..args)
                 .map(|_| self.pop())
                 .map(|x| Rc::new(RefCell::new(UpValue::Closed(x))))
                 .collect::<Vec<_>>();
-            let lambda_arity = callee_arity - args;
             for i in 0..args {
                 chunk.write(Instr::LoadUpValue(i));
             }
@@ -170,6 +171,7 @@ impl Vm {
                 idx,
                 args: callee_arity,
             });
+            let chunk = chunk.into_chunk();
             print_chunk(&chunk, &mut std::io::stderr()).unwrap();
             let closure = ObjClosure {
                 proto: ObjProto {
@@ -246,6 +248,7 @@ impl Vm {
 
         while self.ip() < self.code().len() {
             let instr = self.code()[self.ip()];
+            let stack_len = self.stack.len();
             match instr {
                 Instr::LoadBool(value) => self.stack.push(Value::Bool(value)),
                 Instr::LoadInt(value) => self.stack.push(Value::Int(value)),
@@ -418,6 +421,7 @@ impl Vm {
                     self.stack.push(top);
                 }
             }
+            debug_assert_eq!(self.stack.len() as i32, stack_len as i32 + instr.adjust());
             *self.ip_mut() += 1;
         }
     }
@@ -433,7 +437,7 @@ impl Drop for Vm {
             eprintln!("== FP: {}", self.frame().frame_pointer);
             eprintln!("== STACK");
             for (i, value) in self.stack.iter().enumerate() {
-                eprintln!("{i}: {value}");
+                println!("{i}: {value}");
             }
         }
     }

@@ -13,7 +13,7 @@ use nopo_passes::unify::UnifyTypes;
 
 use crate::print::print_chunk;
 use crate::types::Instr::{self, *};
-use crate::types::{Chunk, ObjClosure, ObjProto, Object, Value, VmIndex};
+use crate::types::{Chunk, ChunkBuilder, ObjClosure, ObjProto, Object, Value, VmIndex};
 
 #[derive(Debug)]
 pub struct Codegen {
@@ -23,18 +23,7 @@ pub struct Codegen {
     _binding_types_map: HashMap<BindingId, ResolvedType>,
     _types_map: TypesMap,
     offset_map: ArenaMap<BindingId, BindingOffset>,
-    chunks: Vec<ChunkWithData>,
-}
-
-#[derive(Debug)]
-struct ChunkWithData {
-    chunk: Chunk,
-    /// Temporary data storing the next offset for a variable.
-    next_offset: u32,
-    /// List of upvalues that should be captured.
-    ///
-    /// Stored as the instructions needed to push the upvalue onto the stack.
-    upvalues: Vec<Instr>,
+    chunks: Vec<ChunkBuilder>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -52,11 +41,6 @@ enum BindingKind {
     Local,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct OffsetState {
-    next_offset: u32,
-}
-
 impl Codegen {
     pub fn new(unify: UnifyTypes) -> Self {
         Self {
@@ -70,57 +54,50 @@ impl Codegen {
     }
 
     /// Get the last chunk in the chunks stack. This is probably where we want to codegen.
-    fn chunk(&mut self) -> &mut Chunk {
-        &mut self.chunks.last_mut().unwrap().chunk
+    fn chunk(&mut self) -> &mut ChunkBuilder {
+        self.chunks.last_mut().unwrap()
     }
 
     /// Push a chunk with a name onto the chunk stack.
-    fn new_chunk(&mut self, name: String) {
-        self.chunks.push(ChunkWithData {
-            chunk: Chunk::new(name),
-            next_offset: 0,
-            upvalues: Vec::new(),
-        });
+    fn new_chunk(&mut self, name: String, arity: u32) {
+        self.chunks.push(ChunkBuilder::new(name, arity));
     }
 
     fn pop_chunk(&mut self) -> Rc<Chunk> {
-        Rc::new(self.pop_chunk_with_data().chunk)
+        Rc::new(self.pop_chunk_builder().chunk)
     }
 
-    fn pop_chunk_with_data(&mut self) -> ChunkWithData {
+    fn pop_chunk_builder(&mut self) -> ChunkBuilder {
         let data = self.chunks.pop().unwrap();
         print_chunk(&data.chunk, &mut std::io::stderr()).unwrap(); // TODO: remove this.
         data
     }
 
-    /// Increment the stack offset. This is automatically called by [`Self::new_binding_offset`].
-    /// Returns the current offset.
-    fn inc_offset(&mut self) -> u32 {
-        let last_chunk = self.chunks.last_mut().unwrap();
-        let offset = last_chunk.next_offset;
-        last_chunk.next_offset += 1;
-        offset
-    }
-
-    /// Insert a new entry into the offset map. Increments next_offset.
-    fn new_binding_offset(&mut self, id: BindingId, kind: BindingKind) {
-        let offset = self.inc_offset();
+    /// Insert a new binding into the offset map. The offset of the binding is the current offset
+    /// of the stack.
+    ///
+    /// This should always be called __before__ the intrusction to load the value of the binding has
+    /// been emitted.
+    fn new_binding_at_top(&mut self, id: BindingId, kind: BindingKind) {
         let binding_data = BindingOffset {
             kind,
-            offset,
+            offset: self.current_offset(),
             chunks_depth: self.chunks.len() - 1,
         };
         self.offset_map.insert(id, binding_data);
     }
 
-    /// Insert a new entry into the offset map without incrementing next_offset.
-    fn new_binding_no_offset(&mut self, id: BindingId, kind: BindingKind) {
+    fn new_binding_at_pos(&mut self, id: BindingId, kind: BindingKind, pos: u32) {
         let binding_data = BindingOffset {
             kind,
-            offset: self.chunks.last().unwrap().next_offset,
+            offset: pos,
             chunks_depth: self.chunks.len() - 1,
         };
         self.offset_map.insert(id, binding_data);
+    }
+
+    fn current_offset(&self) -> u32 {
+        self.chunks.last().unwrap().offset
     }
 
     /// Threads a binding through a stack of closures and returns the upvalue offset.
@@ -132,7 +109,7 @@ impl Codegen {
         assert!(current_depth > decl_depth);
 
         /// Adds an upvalue to a chunk if not already added. Returns the offset of the upvalue.
-        fn add_upvalue_to_chunk(chunk: &mut ChunkWithData, instr: Instr) -> u32 {
+        fn add_upvalue_to_chunk(chunk: &mut ChunkBuilder, instr: Instr) -> u32 {
             if let Some(pos) = chunk.upvalues.iter().position(|&x| x == instr) {
                 pos as u32
             } else {
@@ -156,16 +133,6 @@ impl Codegen {
         offset
     }
 
-    fn offset_state(&self) -> OffsetState {
-        OffsetState {
-            next_offset: self.chunks.last().unwrap().next_offset,
-        }
-    }
-
-    fn restore_state(&mut self, state: OffsetState) {
-        self.chunks.last_mut().unwrap().next_offset = state.next_offset;
-    }
-
     pub fn root_closure(mut self) -> ObjClosure {
         assert_eq!(self.chunks.len(), 1);
         ObjClosure {
@@ -181,7 +148,7 @@ impl Codegen {
 
 impl Visitor for Codegen {
     fn visit_root(&mut self, root: &Root) {
-        self.new_chunk("<global>".to_string());
+        self.new_chunk("<global>".to_string(), 0);
         walk_root(self, root);
     }
 
@@ -191,7 +158,10 @@ impl Visitor for Codegen {
                 for (tag, data_constructor) in adt.data_constructors.iter().enumerate() {
                     let binding = self.bindings_map.data_constructors[&data_constructor];
                     // Create a lambda that calls the data constructor.
-                    self.new_chunk(data_constructor.ident.to_string());
+                    self.new_chunk(
+                        data_constructor.ident.to_string(),
+                        data_constructor.of.len() as u32,
+                    );
                     for i in (0..data_constructor.of.len()).rev() {
                         self.chunk().write(LoadLocal(i as u32));
                     }
@@ -209,14 +179,14 @@ impl Visitor for Codegen {
                         upvalues: Vec::new(),
                     }))));
                     let slot = self.chunk().write_const(value);
-                    self.chunk().write(LoadConst(slot));
-                    self.new_binding_offset(
+                    self.new_binding_at_top(
                         binding,
                         BindingKind::GlobalDataConstructor {
                             tag: tag as u32,
                             arity: data_constructor.of.len() as u32,
                         },
                     );
+                    self.chunk().write(LoadConst(slot));
                 }
             }
             TypeDef::Record(_) => {}
@@ -230,15 +200,15 @@ impl Visitor for Codegen {
         // global stack.
         match item.params.len() {
             0 => {
+                self.new_binding_at_top(binding, BindingKind::Global);
                 self.visit_expr(&item.expr);
-                self.new_binding_offset(binding, BindingKind::Global);
             }
             arity => {
-                self.new_binding_offset(binding, BindingKind::Global);
-                self.new_chunk(item.ident.to_string());
-                for param in &item.params {
+                self.new_binding_at_top(binding, BindingKind::Global);
+                self.new_chunk(item.ident.to_string(), arity as u32);
+                for (i, param) in item.params.iter().enumerate() {
                     let binding = self.bindings_map.params[&*param];
-                    self.new_binding_offset(binding, BindingKind::Local);
+                    self.new_binding_at_pos(binding, BindingKind::Local, i as u32);
                 }
                 self.visit_expr(&item.expr);
                 let chunk = self.pop_chunk();
@@ -282,13 +252,13 @@ impl Visitor for Codegen {
             Expr::Lambda(lambda_expr) => {
                 let arity = lambda_expr.params.len();
 
-                self.new_chunk("<lambda>".to_string());
-                for param in &lambda_expr.params {
+                self.new_chunk("<lambda>".to_string(), arity as u32);
+                for (i, param) in lambda_expr.params.iter().enumerate() {
                     let binding = self.bindings_map.lambda_params[&*param];
-                    self.new_binding_offset(binding, BindingKind::Local);
+                    self.new_binding_at_pos(binding, BindingKind::Local, i as u32);
                 }
                 self.visit_expr(&lambda_expr.expr);
-                let data = self.pop_chunk_with_data();
+                let data = self.pop_chunk_builder();
                 let value = Value::Object(Rc::new(Object::Proto(ObjProto {
                     arity: arity as u32,
                     chunk: Rc::new(data.chunk),
@@ -417,16 +387,21 @@ impl Visitor for Codegen {
             },
             Expr::If(if_expr) => {
                 self.visit_expr(&if_expr.cond);
-                let then_jump = self.chunk().write_get_offset(CJump(0));
+                let then_jump = self.chunk().write_get_pos(CJump(0));
+                let split = self.chunk().split_branch();
+
                 self.visit_expr(&if_expr.else_);
-                let else_jump = self.chunk().write_get_offset(Jump(0));
+                let else_jump = self.chunk().write_get_pos(Jump(0));
+
+                self.chunk().restore_split(split);
+
                 self.chunk().patch_jump(then_jump);
                 self.visit_expr(&if_expr.then);
                 self.chunk().patch_jump(else_jump);
             }
             Expr::Match(match_expr) => {
-                let state = self.offset_state();
                 self.visit_expr(&match_expr.matched);
+                let start_offset = self.current_offset();
 
                 let mut jumps = Vec::new();
 
@@ -434,16 +409,19 @@ impl Visitor for Codegen {
                 for arm in &match_expr.arms {
                     self.visit_pattern(&arm.pattern);
                     // Jump to that arm if pattern was matched.
-                    jumps.push(self.chunk().write_get_offset(CJump(0)));
+                    jumps.push(self.chunk().write_get_pos(CJump(0)));
                 }
                 // Codegen for the actual expression.
+                let split = self.chunk().split_branch();
                 let mut jumps_end = Vec::new();
                 for (arm, jump) in match_expr.arms.iter().zip(jumps) {
+                    self.chunk().restore_split(split);
                     self.chunk().patch_jump(jump);
+                    assert_eq!(start_offset, self.current_offset());
 
-                    let state = self.offset_state();
+                    let offset = self.current_offset();
                     self.visit_pattern_bindings(&arm.pattern);
-                    let diff = self.offset_state().next_offset - state.next_offset;
+                    let diff = self.current_offset() - offset;
 
                     self.visit_expr(&arm.expr);
 
@@ -451,33 +429,30 @@ impl Visitor for Codegen {
                     if diff != 0 {
                         self.chunk().write(Slide(diff));
                     }
-                    self.restore_state(state);
-                    jumps_end.push(self.chunk().write_get_offset(Jump(0)));
+                    jumps_end.push(self.chunk().write_get_pos(Jump(0)));
                 }
                 for jump_end in jumps_end {
                     self.chunk().patch_jump(jump_end);
                 }
                 // Get rid of matched expression.
                 self.chunk().write(Slide(1));
-                self.restore_state(state);
             }
             Expr::While(_) => todo!(),
             Expr::For(_) => todo!(),
             Expr::Loop(_) => todo!(),
             Expr::Return(_) => todo!(),
             Expr::Let(let_expr) => {
-                let state = self.offset_state();
                 let binding = self.bindings_map.let_exprs[&*let_expr];
                 let kind = if self.chunks.len() == 1 {
                     BindingKind::Global
                 } else {
                     BindingKind::Local
                 };
-                self.new_binding_offset(binding, kind);
+                self.new_binding_at_top(binding, kind);
                 self.visit_expr(&let_expr.expr);
+
                 self.visit_expr(&let_expr._in);
                 self.chunk().write(Slide(1));
-                self.restore_state(state);
             }
             Expr::Err => unreachable!(),
         }
@@ -506,10 +481,13 @@ impl Visitor for Codegen {
                 self.chunk().write(HasTag(tag));
 
                 // If we have the right tag, check all the sub patterns.
-                let jump_true = self.chunk().write_get_offset(CJump(0));
-                self.chunk().write(LoadBool(false));
-                let jump_end = self.chunk().write_get_offset(Jump(0));
+                let jump_true = self.chunk().write_get_pos(CJump(0));
+                let split = self.chunk().split_branch();
 
+                self.chunk().write(LoadBool(false));
+                let jump_end = self.chunk().write_get_pos(Jump(0));
+
+                self.chunk().restore_split(split);
                 self.chunk().patch_jump(jump_true);
                 self.chunk().write(Dup);
                 let mut conjuncts = 0;
@@ -574,18 +552,21 @@ impl Codegen {
                     } else {
                         BindingKind::Local
                     };
-                    self.new_binding_no_offset(binding, kind);
+                    self.new_binding_at_top(binding, kind);
                 }
             }
             Pattern::Adt(adt) => {
-                self.chunk().write(Dup);
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
-                    self.inc_offset();
+                    let is_path = matches!(&**sub_pattern, Pattern::Path(_));
+                    if is_path {
+                        self.visit_pattern_bindings(sub_pattern);
+                    }
+                    self.chunk().write(DupRel(field as u32));
                     self.chunk().write(GetField(field as u32));
-                    self.visit_pattern_bindings(sub_pattern);
-                    self.chunk().write(DupRel(field as u32 + 1));
+                    if !is_path {
+                        self.visit_pattern_bindings(sub_pattern);
+                    }
                 }
-                self.chunk().write(Pop);
             }
             Pattern::Lit(_) => {}
             Pattern::Err => unreachable!(),

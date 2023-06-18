@@ -52,6 +52,7 @@ pub enum Instr {
     /// Duplicate the top value.
     Dup,
     /// Duplicate the value that is a certain number of indices below the top.
+    /// An index of `0` is equivalent to `Dup`.
     DupRel(VmIndex),
     /// Swap the top two values.
     Swap,
@@ -137,6 +138,54 @@ pub enum Instr {
     Slide(VmIndex),
 }
 
+impl Instr {
+    /// How much this instruction adjusts the stack.
+    pub fn adjust(self) -> i32 {
+        match self {
+            Instr::LoadBool(_)
+            | Instr::LoadInt(_)
+            | Instr::LoadFloat(_)
+            | Instr::LoadChar(_)
+            | Instr::LoadConst(_)
+            | Instr::LoadLocal(_)
+            | Instr::LoadGlobal(_)
+            | Instr::LoadUpValue(_) => 1,
+            Instr::Dup | Instr::DupRel(_) => 1,
+            Instr::Swap => 0,
+            Instr::Jump(_) => 0,
+            Instr::CJump(_) => -1,
+            Instr::Calli { args } => -(args as i32),
+            Instr::CallGlobal { idx: _, args } => -(args as i32) + 1,
+            Instr::MakeClosure { idx: _, upvalues } => -(upvalues as i32) + 1,
+            Instr::MakeTuple { args } => -(args as i32) + 1,
+            Instr::MakeAdt { tag: _, args } => -(args as i32) + 1,
+            Instr::GetField(_) => 0,
+            Instr::GetFieldPush(_) => 1,
+            Instr::HasTag(_) => 1,
+            Instr::IntAdd
+            | Instr::IntSub
+            | Instr::IntMul
+            | Instr::IntDiv
+            | Instr::IntMod
+            | Instr::IntAnd
+            | Instr::IntOr
+            | Instr::IntXor
+            | Instr::IntShl
+            | Instr::IntShr
+            | Instr::IntRor
+            | Instr::IntLt
+            | Instr::IntGt
+            | Instr::IntLte
+            | Instr::IntGte => -1,
+            Instr::BoolNot => 0,
+            Instr::BoolAnd | Instr::BoolOr | Instr::ValEq => -1,
+            Instr::Pop => -1,
+            Instr::PopN(n) => -(n as i32),
+            Instr::Slide(n) => -(n as i32),
+        }
+    }
+}
+
 /// A block of bytecode.
 #[derive(Debug)]
 pub struct Chunk {
@@ -146,44 +195,79 @@ pub struct Chunk {
     pub name: String,
 }
 
-impl Chunk {
-    pub fn new(name: String) -> Self {
+#[derive(Debug)]
+pub struct ChunkBuilder {
+    pub chunk: Chunk,
+    /// The current stack offset.
+    /// Should be initialized to the arity of the function.
+    pub offset: u32,
+    /// Instructions for capturing upvalues.
+    pub upvalues: Vec<Instr>,
+}
+
+/// Stores the offset before the branching.
+/// THis can be used to restore the offset when doing codegen for the other branch.
+#[derive(Debug, Clone, Copy)]
+#[must_use]
+pub struct ChunkSplit(u32);
+
+impl ChunkBuilder {
+    pub fn new(name: String, arity: u32) -> Self {
         Self {
-            code: Vec::new(),
-            consts: Vec::new(),
-            name,
+            chunk: Chunk {
+                code: Vec::new(),
+                consts: Vec::new(),
+                name,
+            },
+            offset: arity,
+            upvalues: Vec::new(),
         }
     }
 
-    /// Writes a new instruction to the code buffer. Returns the offset of the instruction.
-    pub fn write_get_offset(&mut self, instr: Instr) -> usize {
-        let offset = self.code.len();
-        self.code.push(instr);
-        offset
+    /// Writes a new instruction to the code buffer. Returns the byte position of the instruction.
+    pub fn write_get_pos(&mut self, instr: Instr) -> usize {
+        let pos = self.chunk.code.len();
+        self.offset = (self.offset as i32 + instr.adjust()) as u32;
+        self.chunk.code.push(instr);
+        pos
     }
 
     pub fn write(&mut self, instr: Instr) {
-        let _ = self.write_get_offset(instr);
+        let _ = self.write_get_pos(instr);
     }
-    ///
+
     /// Patch a jump instruction to jump to the current offset.
     pub fn patch_jump(&mut self, offset: usize) {
-        let current = self.code.len();
+        let current = self.chunk.code.len();
         let distance = current - offset - 1; // -1 for the jump instruction itself.
-        match &mut self.code[offset] {
+        match &mut self.chunk.code[offset] {
             Instr::Jump(x) | Instr::CJump(x) => *x = distance as u32,
             _ => panic!("instruction at {offset} is not a jump"),
         }
     }
 
     pub fn write_const(&mut self, value: Value) -> u32 {
-        let idx = self.consts.len();
-        self.consts.push(value);
+        let idx = self.chunk.consts.len();
+        self.chunk.consts.push(value);
         idx as u32
     }
 
     pub fn patch_const(&mut self, slot: u32) -> &mut Value {
-        &mut self.consts[slot as usize]
+        &mut self.chunk.consts[slot as usize]
+    }
+
+    /// Should be called right after branch instruction but before anything in the branch itself.
+    pub fn split_branch(&mut self) -> ChunkSplit {
+        ChunkSplit(self.offset)
+    }
+
+    /// Should be called when moving to codegen of other branch.
+    pub fn restore_split(&mut self, split: ChunkSplit) {
+        self.offset = split.0;
+    }
+
+    pub fn into_chunk(self) -> Chunk {
+        self.chunk
     }
 }
 
