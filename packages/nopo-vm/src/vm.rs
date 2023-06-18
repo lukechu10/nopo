@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::print::print_chunk;
@@ -81,9 +80,9 @@ impl Vm {
             let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
             let mut upvalues = (0..args)
                 .map(|_| self.pop())
-                .map(|x| Rc::new(RefCell::new(UpValue(x))))
+                .map(UpValue)
                 .collect::<Vec<_>>();
-            upvalues.push(Rc::new(RefCell::new(UpValue(self.pop())))); // This should be the closure.
+            upvalues.push(UpValue(self.pop())); // This should be the closure.
             chunk.write(Instr::LoadUpValue(lambda_arity));
             for i in 0..args {
                 chunk.write(Instr::LoadUpValue(i));
@@ -137,7 +136,7 @@ impl Vm {
             let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
             let upvalues = (0..args)
                 .map(|_| self.pop())
-                .map(|x| Rc::new(RefCell::new(UpValue(x))))
+                .map(UpValue)
                 .collect::<Vec<_>>();
             for i in 0..args {
                 chunk.write(Instr::LoadUpValue(i));
@@ -204,23 +203,23 @@ impl Vm {
         macro_rules! gen_int_op {
             ($op:tt) => {{
                 let rhs = self.pop();
-                let lhs = self.pop();
+                let lhs = self.stack.last().unwrap();
                 let value = match (lhs, rhs) {
-                    (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs $op rhs),
+                    (Value::Int(lhs), Value::Int(rhs)) => Value::Int(*lhs $op rhs),
                     _ => unreachable!(),
                 };
-                self.stack.push(value);
+                *self.stack.last_mut().unwrap() = value;
             }};
         }
         macro_rules! gen_int_relational_op {
             ($op:tt) => {{
                 let rhs = self.pop();
-                let lhs = self.pop();
+                let lhs = self.stack.last().unwrap();
                 let value = match (lhs, rhs) {
-                    (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(lhs $op rhs),
+                    (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(*lhs $op rhs),
                     _ => unreachable!(),
                 };
-                self.stack.push(value);
+                *self.stack.last_mut().unwrap() = value;
             }};
         }
 
@@ -241,7 +240,7 @@ impl Vm {
                 Instr::LoadGlobal(idx) => self.stack.push(self.stack[idx as usize].clone()),
                 Instr::LoadUpValue(idx) => {
                     let upvalue = self.frame().closure.upvalues[idx as usize].clone();
-                    self.stack.push(upvalue.borrow().0.clone());
+                    self.stack.push(upvalue.0);
                 }
                 Instr::Dup => {
                     self.stack.push(self.stack.last().unwrap().clone());
@@ -277,7 +276,8 @@ impl Vm {
                 }
                 Instr::MakeClosure { idx, upvalues } => {
                     let upvalues = (0..upvalues)
-                        .map(|_| Rc::new(RefCell::new(UpValue(self.pop()))))
+                        .map(|_| self.pop())
+                        .map(UpValue)
                         .collect::<Vec<_>>();
                     let proto = self.frame().closure.proto.chunk.consts[idx as usize]
                         .as_object()

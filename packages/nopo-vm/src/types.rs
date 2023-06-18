@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -429,7 +428,7 @@ pub struct ObjProto {
 #[derive(Debug)]
 pub struct ObjClosure {
     pub proto: ObjProto,
-    pub upvalues: Vec<Rc<RefCell<UpValue>>>,
+    pub upvalues: Vec<UpValue>,
 }
 
 pub type ValueArray = Vec<Value>;
