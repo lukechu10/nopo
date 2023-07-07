@@ -3,14 +3,14 @@
 //! This runs after type unification since we don't use record fields to infer types.
 
 use nopo_diagnostics::span::{spanned, Span, Spanned};
-use nopo_diagnostics::{Diagnostics, Report};
+use nopo_diagnostics::Report;
 
 use nopo_parser::ast::{Expr, Ident};
 use nopo_parser::lexer::BinOp;
 use nopo_parser::visitor::{walk_expr, Visitor};
 
-use crate::resolve::{ResolvedType, ResolvedTypePretty, TypeKind};
-use crate::unify::{Constraint, GenerateConstraints, UnifyTypes};
+use crate::db::{Db, ResolvedType, ResolvedTypePretty, TypeKind};
+use crate::unify::{Constraint, GenerateConstraints};
 
 #[derive(Report)]
 #[kind("error")]
@@ -62,22 +62,13 @@ struct MissingFields {
 
 #[derive(Debug)]
 pub struct TypeCheckRecords<'a> {
-    unify: &'a mut UnifyTypes,
+    db: &'a mut Db,
     state: &'a mut GenerateConstraints,
-    diagnostics: Diagnostics,
 }
 
 impl<'a> TypeCheckRecords<'a> {
-    pub fn new(
-        unify: &'a mut UnifyTypes,
-        state: &'a mut GenerateConstraints,
-        diagnostics: Diagnostics,
-    ) -> Self {
-        Self {
-            unify,
-            state,
-            diagnostics,
-        }
+    pub fn new(db: &'a mut Db, state: &'a mut GenerateConstraints) -> Self {
+        Self { db, state }
     }
 }
 
@@ -85,7 +76,7 @@ impl<'a> TypeCheckRecords<'a> {
     fn resolve_field_ty(&mut self, expr: &Spanned<Expr>, field: &Spanned<Expr>) -> ResolvedType {
         // Check that field is an identifier.
         let Expr::Ident(field) = &**field else {
-            self.diagnostics.add(FieldMustBeIdentifier {
+            self.db.diagnostics.add(FieldMustBeIdentifier {
                 span: field.span(),
                 expr: field.span(),
             });
@@ -94,40 +85,40 @@ impl<'a> TypeCheckRecords<'a> {
         let ty = &mut self.state.expr_types_map[&*expr];
 
         if let ResolvedType::Var(_) | ResolvedType::Param(_) = ty {
-            self.diagnostics.add(TypeMustBeKnown {
+            self.db.diagnostics.add(TypeMustBeKnown {
                 span: expr.span(),
                 expr: expr.span(),
             });
             ResolvedType::Err
         } else if let Some(id) = ty.ident_of_constructed() {
-            let data_def = &self.unify.types_map.items[id];
+            let data_def = &self.db.types_map.items[id];
             match &data_def.kind {
                 TypeKind::Record(record_def) => match record_def.fields.get(field.ident.as_ref()) {
                     Some(ty) => ty.clone(),
                     None => {
-                        self.diagnostics.add(UnknownField {
+                        self.db.diagnostics.add(UnknownField {
                             span: field.span(),
                             field: field.ident.clone(),
-                            ty: ty.pretty(&self.unify.types_map.items),
+                            ty: ty.pretty(&self.db.types_map.items),
                         });
                         ResolvedType::Err
                     }
                 },
                 TypeKind::Adt(_) => {
-                    self.diagnostics.add(NotRecordType {
+                    self.db.diagnostics.add(NotRecordType {
                         span: expr.span(),
                         expr: expr.span(),
-                        ty: ty.pretty(&self.unify.types_map.items),
+                        ty: ty.pretty(&self.db.types_map.items),
                     });
                     ResolvedType::Err
                 }
                 TypeKind::Tmp => unreachable!(),
             }
         } else {
-            self.diagnostics.add(NotRecordType {
+            self.db.diagnostics.add(NotRecordType {
                 span: expr.span(),
                 expr: expr.span(),
-                ty: ty.pretty(&self.unify.types_map.items),
+                ty: ty.pretty(&self.db.types_map.items),
             });
             ResolvedType::Err
         }
@@ -153,21 +144,21 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
             Expr::Record(record_expr) => {
                 let ty = &self.state.expr_types_map[&*expr];
                 if let ResolvedType::Var(_) | ResolvedType::Param(_) = ty {
-                    self.diagnostics.add(TypeMustBeKnown {
+                    self.db.diagnostics.add(TypeMustBeKnown {
                         span: expr.span(),
                         expr: expr.span(),
                     });
                 } else if let Some(id) = ty.ident_of_constructed() {
-                    let data_def = &self.unify.types_map.items[id];
+                    let data_def = &self.db.types_map.items[id];
                     match &data_def.kind {
                         TypeKind::Record(record_def) => {
                             // Check every field in the record_expr.
                             for field in &record_expr.fields {
                                 if record_def.fields.get(&field.ident).is_none() {
-                                    self.diagnostics.add(UnknownField {
+                                    self.db.diagnostics.add(UnknownField {
                                         span: field.span(),
                                         field: field.ident.clone(),
-                                        ty: ty.pretty(&self.unify.types_map.items),
+                                        ty: ty.pretty(&self.db.types_map.items),
                                     });
                                 }
                             }
@@ -185,7 +176,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                                 ));
                             }
                             if !missing.is_empty() {
-                                self.diagnostics.add(MissingFields {
+                                self.db.diagnostics.add(MissingFields {
                                     span: expr.span(),
                                     expr: expr.span(),
                                     missing: missing.join(", "),
@@ -193,19 +184,19 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                             }
                         }
                         TypeKind::Adt(_) => {
-                            self.diagnostics.add(NotRecordType {
+                            self.db.diagnostics.add(NotRecordType {
                                 span: expr.span(),
                                 expr: expr.span(),
-                                ty: ty.pretty(&self.unify.types_map.items),
+                                ty: ty.pretty(&self.db.types_map.items),
                             });
                         }
                         TypeKind::Tmp => unreachable!(),
                     }
                 } else {
-                    self.diagnostics.add(NotRecordType {
+                    self.db.diagnostics.add(NotRecordType {
                         span: expr.span(),
                         expr: expr.span(),
-                        ty: ty.pretty(&self.unify.types_map.items),
+                        ty: ty.pretty(&self.db.types_map.items),
                     });
                 }
             }

@@ -47,12 +47,12 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let unify = run_resolution_passes(&root, diagnostics.clone());
+        let db = run_resolution_passes(&root, diagnostics.clone());
         if !diagnostics.eprint(&map) {
             continue;
         }
 
-        compile_and_run(&root, unify.unwrap());
+        compile_and_run(&root, &db);
     }
 
     Ok(())

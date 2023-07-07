@@ -4,9 +4,8 @@
 //!
 //! Prefix all constraint types in code with `c_` to distinguish from syntax elements.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
-use la_arena::Arena;
 use nopo_diagnostics::span::{spanned, Span, Spanned};
 use nopo_diagnostics::{Diagnostics, Report};
 use nopo_parser::ast::{Expr, LetId, LetItem, LitExpr, Pattern, Root, TypeDef, TypeId, TypeItem};
@@ -14,13 +13,10 @@ use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_expr, walk_pattern, Visitor};
 
 use crate::check_records::TypeCheckRecords;
-use crate::resolve::Binding;
-
-use super::map::NodeMap;
-use super::resolve::{
-    BindingId, BindingsMap, ResolveSymbols, ResolvedBinding, ResolvedType, ResolvedTypePretty,
-    TypeKind, TypeVar, TypesMap,
+use crate::db::{
+    Db, ResolvedBinding, ResolvedType, ResolvedTypePretty, TypeKind, TypeVar, TypesMap,
 };
+use crate::map::NodeMap;
 
 #[derive(Report)]
 #[kind("error")]
@@ -46,14 +42,9 @@ struct CannotCreateInfiniteType<'a> {
 
 /// Type unification pass (type inference).
 #[derive(Debug)]
-pub struct UnifyTypes {
-    pub bindings: Arena<Binding>,
-    pub bindings_map: BindingsMap,
-    /// Contains the type of all the bindings.
-    pub binding_types_map: HashMap<BindingId, ResolvedType>,
-    pub types_map: TypesMap,
+pub struct UnifyTypes<'a> {
+    pub db: &'a mut Db,
     state: GenerateConstraints,
-    diagnostics: Diagnostics,
 }
 
 /// Temporary state used in unifying types.
@@ -83,20 +74,16 @@ impl GenerateConstraints {
     }
 }
 
-impl UnifyTypes {
-    pub fn new(resolve: ResolveSymbols, diagnostics: Diagnostics) -> Self {
+impl<'a> UnifyTypes<'a> {
+    pub fn new(db: &'a mut Db) -> Self {
         Self {
-            bindings: resolve.bindings,
-            bindings_map: resolve.bindings_map,
-            binding_types_map: HashMap::new(),
-            types_map: resolve.types_map,
+            db,
             state: GenerateConstraints::default(),
-            diagnostics,
         }
     }
 }
 
-impl Visitor for UnifyTypes {
+impl<'a> Visitor for UnifyTypes<'a> {
     fn visit_root(&mut self, root: &Root) {
         // Visit type items first since we know the types of all the data constructors.
         for (idx, item) in root.type_items.iter() {
@@ -108,10 +95,10 @@ impl Visitor for UnifyTypes {
             self.visit_let_item(idx, item);
             let mut state = std::mem::take(&mut self.state);
 
-            let solutions = state.solve(&self.diagnostics, &self.types_map);
+            let solutions = state.solve(&self.db.diagnostics, &self.db.types_map);
 
-            let binding_id = self.bindings_map.let_items[&*item];
-            let mut binding_ty = self.binding_types_map[&binding_id].clone();
+            let binding_id = self.db.bindings_map.let_items[&*item];
+            let mut binding_ty = self.db.binding_types_map[&binding_id].clone();
 
             // Substitute in solutions.
             for (var, sub) in solutions {
@@ -122,12 +109,11 @@ impl Visitor for UnifyTypes {
             }
 
             // Get types of member and record expressions.
-            let mut check_records =
-                TypeCheckRecords::new(self, &mut state, self.diagnostics.clone());
+            let mut check_records = TypeCheckRecords::new(self.db, &mut state);
             check_records.visit_let_item(idx, item);
 
             // Solve constraints again now that we have types from records.
-            let solutions = state.solve(&self.diagnostics, &self.types_map);
+            let solutions = state.solve(&self.db.diagnostics, &self.db.types_map);
             for (var, sub) in solutions {
                 binding_ty.apply_sub(&var, sub.clone());
                 for expr_ty in self.state.expr_types_map.map.values_mut() {
@@ -138,31 +124,32 @@ impl Visitor for UnifyTypes {
             // Generalize the type of this binding.
             let binding_ty = binding_ty.generalize();
 
-            let pretty = binding_ty.pretty(&self.types_map.items);
+            let pretty = binding_ty.pretty(&self.db.types_map.items);
             eprintln!(" {}: {pretty}", item.ident);
-            self.binding_types_map.insert(binding_id, binding_ty);
+            self.db.binding_types_map.insert(binding_id, binding_ty);
         }
     }
 
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
         match &*item.def {
             TypeDef::Adt(adt) => {
-                let type_data = match &self.types_map.items[idx].kind {
+                let type_data = match &self.db.types_map.items[idx].kind {
                     TypeKind::Adt(adt) => adt,
                     _ => unreachable!(),
                 };
-                let c_ty = ResolvedType::of_type_item(idx, &self.types_map.items);
+                let c_ty = ResolvedType::of_type_item(idx, &self.db.types_map.items);
                 for (data_constructor, variant) in
                     adt.data_constructors.iter().zip(&type_data.variants)
                 {
-                    let binding = self.bindings_map.data_constructors[&**data_constructor];
+                    let binding = self.db.bindings_map.data_constructors[&**data_constructor];
                     // We can generalize here since we don't do type inference for type items.
                     let c_data_constructor_ty =
                         ResolvedType::new_curried_function(&variant.types, c_ty.clone())
                             .generalize();
-                    let pretty = c_data_constructor_ty.pretty(&self.types_map.items);
+                    let pretty = c_data_constructor_ty.pretty(&self.db.types_map.items);
                     eprintln!(" {}: {pretty}", data_constructor.ident);
-                    self.binding_types_map
+                    self.db
+                        .binding_types_map
                         .insert(binding, c_data_constructor_ty);
                 }
             }
@@ -174,8 +161,9 @@ impl Visitor for UnifyTypes {
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
         // The type of the let item.
         let c_ty = spanned(item.ident.span(), self.state.new_type_var());
-        let binding = self.bindings_map.let_items[&**item];
-        self.binding_types_map
+        let binding = self.db.bindings_map.let_items[&**item];
+        self.db
+            .binding_types_map
             .insert(binding, c_ty.clone().unspan());
 
         // Constraints for let params. Since params can have explicit type annotations, we can use
@@ -186,13 +174,13 @@ impl Visitor for UnifyTypes {
             .map(|param| {
                 param.ty.as_ref().map_or_else(
                     || self.state.new_type_var(),
-                    |ty| self.types_map.types[&*ty].clone(),
+                    |ty| self.db.types_map.types[&*ty].clone(),
                 )
             })
             .collect::<Vec<_>>();
         for (c_ty, param) in c_params_ty.iter().zip(&item.params) {
-            let binding = self.bindings_map.params[&**param];
-            self.binding_types_map.insert(binding, c_ty.clone());
+            let binding = self.db.bindings_map.params[&**param];
+            self.db.binding_types_map.insert(binding, c_ty.clone());
         }
 
         // Constraint for return type.
@@ -202,7 +190,7 @@ impl Visitor for UnifyTypes {
             self.state.expr_types_map[&**item.expr].clone(),
         );
         let c_ret_ty = if let Some(ret_ty) = &item.ret_ty {
-            spanned(ret_ty.span(), self.types_map.types[&**ret_ty].clone())
+            spanned(ret_ty.span(), self.db.types_map.types[&**ret_ty].clone())
         } else {
             spanned(item.expr.span(), self.state.new_type_var())
         };
@@ -223,13 +211,14 @@ impl Visitor for UnifyTypes {
         // var for the binding first.
         match &**expr {
             Expr::Let(let_expr) => {
-                let binding = self.bindings_map.let_exprs[&**let_expr];
+                let binding = self.db.bindings_map.let_exprs[&**let_expr];
                 let c_ret = if let Some(ret_ty) = &let_expr.ret_ty {
-                    spanned(ret_ty.span(), self.types_map.types[&**ret_ty].clone())
+                    spanned(ret_ty.span(), self.db.types_map.types[&**ret_ty].clone())
                 } else {
                     spanned(let_expr.ident.span(), self.state.new_type_var())
                 };
-                self.binding_types_map
+                self.db
+                    .binding_types_map
                     .insert(binding, c_ret.clone().unspan());
                 // Constrain let binding expression.
                 self.visit_expr(&let_expr.expr);
@@ -250,8 +239,8 @@ impl Visitor for UnifyTypes {
                     .map(|_| self.state.new_type_var())
                     .collect::<Vec<_>>();
                 for (param, c_param) in lambda_expr.params.iter().zip(&c_params) {
-                    let binding = self.bindings_map.lambda_params[param];
-                    self.binding_types_map.insert(binding, c_param.clone());
+                    let binding = self.db.bindings_map.lambda_params[param];
+                    self.db.binding_types_map.insert(binding, c_param.clone());
                 }
                 self.visit_expr(&lambda_expr.expr);
                 let c_expr = self.state.expr_types_map[&*lambda_expr.expr].clone();
@@ -295,9 +284,9 @@ impl Visitor for UnifyTypes {
         let c_ty = match &**expr {
             Expr::Ident(ident_expr) => {
                 // Lookup binding and set that as the expression of the type.
-                let binding = &self.bindings_map.idents[&**ident_expr];
+                let binding = &self.db.bindings_map.idents[&**ident_expr];
                 if let ResolvedBinding::Ok(binding) = binding {
-                    let c_binding = self.binding_types_map[binding].clone();
+                    let c_binding = self.db.binding_types_map[binding].clone();
                     self.state.instantiate(c_binding)
                 } else {
                     // If this ident was not resolved, it could potentially be anything.
@@ -433,25 +422,25 @@ impl Visitor for UnifyTypes {
         walk_pattern(self, pattern);
         let c_ty = match &**pattern {
             Pattern::Path(_) => {
-                if let Some(symbol) = self.bindings_map.pattern_tags.get(pattern) {
+                if let Some(symbol) = self.db.bindings_map.pattern_tags.get(pattern) {
                     if let ResolvedBinding::Ok(symbol) = symbol {
-                        let c_fn_ty = self.binding_types_map[symbol].clone();
+                        let c_fn_ty = self.db.binding_types_map[symbol].clone();
                         let c_fn_ty = self.state.instantiate(c_fn_ty);
                         c_fn_ty.uncurry_function().1
                     } else {
                         self.state.new_type_var()
                     }
                 } else {
-                    let binding = self.bindings_map.pattern[pattern];
+                    let binding = self.db.bindings_map.pattern[pattern];
                     let c_ty = self.state.new_type_var();
-                    self.binding_types_map.insert(binding, c_ty.clone());
+                    self.db.binding_types_map.insert(binding, c_ty.clone());
                     c_ty
                 }
             }
             Pattern::Adt(adt) => {
-                let symbol = &self.bindings_map.pattern_tags[pattern];
+                let symbol = &self.db.bindings_map.pattern_tags[pattern];
                 if let ResolvedBinding::Ok(symbol) = symbol {
-                    let c_fn_ty = self.binding_types_map[symbol].clone();
+                    let c_fn_ty = self.db.binding_types_map[symbol].clone();
                     let c_fn_ty = self.state.instantiate(c_fn_ty);
                     let (c_fn_args, c_ty) = c_fn_ty.uncurry_function();
                     // Constrain the types of all the fields.

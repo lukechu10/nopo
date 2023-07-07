@@ -1,22 +1,20 @@
 //! Symbol resolution.
 
-use std::collections::HashMap;
-use std::fmt;
-
-use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::span::{spanned, Span, Spanned};
-use nopo_diagnostics::{Diagnostics, IntoReport, Report};
-use smol_str::SmolStr;
+use nopo_diagnostics::{IntoReport, Report};
 
 use nopo_parser::ast::{
-    BinaryExpr, ConstructedType, DataConstructor, Expr, FnType, Ident, IdentExpr, IfExpr, ItemId,
-    LambdaExpr, LambdaParam, LetExpr, LetId, LetItem, MatchExpr, Param, Path, Pattern, TupleType,
-    Type, TypeDef, TypeId, TypeItem, TypeParam,
+    BinaryExpr, ConstructedType, Expr, FnType, Ident, IdentExpr, IfExpr, ItemId, LambdaExpr,
+    LetExpr, LetId, LetItem, MatchExpr, Path, Pattern, TupleType, Type, TypeDef, TypeId, TypeItem,
+    TypeParam,
 };
 use nopo_parser::lexer::BinOp;
 use nopo_parser::visitor::{walk_expr, walk_let_item, walk_pattern, walk_type_item, Visitor};
 
-use crate::map::NodeMap;
+use crate::db::{
+    AdtSymbol, AdtVariant, Binding, BindingId, DataDef, Db, RecordSymbol, ResolvedBinding,
+    ResolvedType, ResolvedTypePretty, TypeKind, TypeSymbol,
+};
 
 #[derive(Report)]
 #[kind("error")]
@@ -93,13 +91,8 @@ struct NotADataConstructor {
 /// AST pass for resolving symbols. Does not resolve record fields since that requires type
 /// information.
 #[derive(Debug)]
-pub struct ResolveSymbols {
-    pub bindings: Arena<Binding>,
-
-    /// Mapping from identifiers/let-items/let-exprs etc. to their bindings.
-    pub bindings_map: BindingsMap,
-    /// Mapping from types/type-items to their type data.
-    pub types_map: TypesMap,
+pub struct ResolveSymbols<'a> {
+    db: &'a mut Db,
 
     /// Stack of current bindings in scope.
     bindings_stack: Vec<BindingId>,
@@ -108,8 +101,6 @@ pub struct ResolveSymbols {
     /// Temporary state of current item being visited. This is used for creating implicit type
     /// params.
     current_item_id: Option<ItemId>,
-
-    diagnostics: Diagnostics,
 }
 
 #[derive(Clone, Copy)]
@@ -118,16 +109,13 @@ struct StackState {
     types_stack: usize,
 }
 
-impl ResolveSymbols {
-    pub fn new(diagnostics: Diagnostics) -> Self {
+impl<'a> ResolveSymbols<'a> {
+    pub fn new(db: &'a mut Db) -> Self {
         Self {
-            bindings: Arena::new(),
-            bindings_map: BindingsMap::default(),
-            types_map: TypesMap::default(),
+            db,
             bindings_stack: Vec::new(),
             types_stack: Vec::new(),
             current_item_id: None,
-            diagnostics,
         }
     }
 
@@ -157,7 +145,7 @@ impl ResolveSymbols {
             match (expected, found) {
                 (Some(expected), found) if expected == found => resolved,
                 (Some(expected), found) => {
-                    self.diagnostics.add(WrongNumberOfTypeParams {
+                    self.db.diagnostics.add(WrongNumberOfTypeParams {
                         span: ty.span(),
                         ty: data_def.unwrap().ident.clone().respan(ty.span()),
                         def_site: data_def.unwrap().ident.clone(),
@@ -167,16 +155,16 @@ impl ResolveSymbols {
                     ResolvedType::Err
                 }
                 (None, _found) => {
-                    self.diagnostics.add(NotAKind {
+                    self.db.diagnostics.add(NotAKind {
                         span: ty.span(),
-                        ty: spanned(ty.span(), constructor.pretty(&self.types_map.items)),
+                        ty: spanned(ty.span(), constructor.pretty(&self.db.types_map.items)),
                     });
                     ResolvedType::Err
                 }
             }
         } else if let Some(expected) = expected {
             if expected != 0 {
-                self.diagnostics.add(WrongNumberOfTypeParams {
+                self.db.diagnostics.add(WrongNumberOfTypeParams {
                     span: ty.span(),
                     ty: data_def.unwrap().ident.clone().respan(ty.span()),
                     def_site: data_def.unwrap().ident.clone(),
@@ -220,7 +208,7 @@ impl ResolveSymbols {
                     self.types_stack.push((symbol, resolved.clone()));
                     resolved
                 } else {
-                    self.diagnostics.add(UnresolvedTypeParam {
+                    self.db.diagnostics.add(UnresolvedTypeParam {
                         span: *span,
                         param: ident.clone(),
                     });
@@ -258,7 +246,7 @@ impl ResolveSymbols {
                     if self.try_resolve_binding(&ty.path[0]).is_some() {
                         report.set_help("A binding with the same name exists in this scope");
                     }
-                    self.diagnostics.add(report);
+                    self.db.diagnostics.add(report);
                     ResolvedType::Err
                 }
             }
@@ -283,20 +271,20 @@ impl ResolveSymbols {
 
     fn data_def_of_constructed(&self, ty: &ResolvedType) -> Option<&DataDef> {
         ty.ident_of_constructed()
-            .map(|id| &self.types_map.items[id])
+            .map(|id| &self.db.types_map.items[id])
     }
 
     /// Create a new scope for a binding and return the created binding id.
     #[must_use = "binding should be saved to BindingsMap"]
     fn new_binding_scope(&mut self, binding: Binding) -> BindingId {
-        let id = self.bindings.alloc(binding);
+        let id = self.db.bindings.alloc(binding);
         self.bindings_stack.push(id);
         id
     }
 
     fn try_resolve_binding(&self, ident: &Spanned<Ident>) -> Option<BindingId> {
         for id in self.bindings_stack.iter().rev() {
-            if &self.bindings[*id].ident == &**ident {
+            if &self.db.bindings[*id].ident == &**ident {
                 return Some(*id);
             }
         }
@@ -321,12 +309,12 @@ impl ResolveSymbols {
         {
             report.set_help("A type with the same name exists in this scope");
         }
-        self.diagnostics.add(report);
+        self.db.diagnostics.add(report);
         ResolvedBinding::Err
     }
 }
 
-impl Visitor for ResolveSymbols {
+impl<'a> Visitor for ResolveSymbols<'a> {
     fn visit_let_item(&mut self, idx: LetId, item: &Spanned<LetItem>) {
         self.current_item_id = Some(ItemId::Let(idx));
         // If no params, then this is a value instead of a function. Don't allow recursive values.
@@ -335,13 +323,13 @@ impl Visitor for ResolveSymbols {
         }
         // Create binding for let item itself.
         let let_binding = self.new_binding_scope(Binding::new(item.ident.as_ref().clone()));
-        self.bindings_map.let_items.insert(item, let_binding);
+        self.db.bindings_map.let_items.insert(item, let_binding);
         // We want the environment to be restored to this state after the let item.
         let state = self.get_stack_state();
         // Create bindings for all params.
         for param in &item.params {
             let param_binding = self.new_binding_scope(Binding::new(param.ident.as_ref().clone()));
-            self.bindings_map.params.insert(param, param_binding);
+            self.db.bindings_map.params.insert(param, param_binding);
         }
         if !item.params.is_empty() {
             walk_let_item(self, item);
@@ -365,7 +353,8 @@ impl Visitor for ResolveSymbols {
                     data_constructor.of.len(),
                     tag as u32,
                 ));
-                self.bindings_map
+                self.db
+                    .bindings_map
                     .data_constructors
                     .insert(data_constructor, binding);
             }
@@ -389,7 +378,7 @@ impl Visitor for ResolveSymbols {
             ty_params: item.ty_params.clone(),
             span: item.span(),
         };
-        self.types_map.items.insert(idx, data_def);
+        self.db.types_map.items.insert(idx, data_def);
 
         walk_type_item(self, item);
 
@@ -404,7 +393,7 @@ impl Visitor for ResolveSymbols {
                         types: x
                             .of
                             .iter()
-                            .map(|ty| self.types_map.types[ty].clone())
+                            .map(|ty| self.db.types_map.types[ty].clone())
                             .collect(),
                     })
                     .collect(),
@@ -416,14 +405,14 @@ impl Visitor for ResolveSymbols {
                     .map(|field| {
                         (
                             field.ident.as_ref().clone(),
-                            self.types_map.types[&field.ty].clone(),
+                            self.db.types_map.types[&field.ty].clone(),
                         )
                     })
                     .collect(),
             }),
             TypeDef::Err => unreachable!(),
         };
-        self.types_map.items[idx].kind = kind;
+        self.db.types_map.items[idx].kind = kind;
 
         self.restore_stack_state(state);
         self.current_item_id = None;
@@ -431,7 +420,7 @@ impl Visitor for ResolveSymbols {
 
     fn visit_type(&mut self, ty: &Spanned<Type>) {
         let resolved = self.resolve_type(ty);
-        self.types_map.types.insert(ty, resolved);
+        self.db.types_map.types.insert(ty, resolved);
     }
 
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
@@ -449,7 +438,7 @@ impl Visitor for ResolveSymbols {
                 self.visit_expr(expr);
                 // Now we can add the binding.
                 let binding = self.new_binding_scope(Binding::new(ident.as_ref().clone()));
-                self.bindings_map.let_exprs.insert(let_expr, binding);
+                self.db.bindings_map.let_exprs.insert(let_expr, binding);
 
                 self.visit_expr(_in);
 
@@ -465,7 +454,7 @@ impl Visitor for ResolveSymbols {
                 for param in params {
                     let binding =
                         self.new_binding_scope(Binding::new(param.ident.as_ref().clone()));
-                    self.bindings_map.lambda_params.insert(param, binding);
+                    self.db.bindings_map.lambda_params.insert(param, binding);
                 }
 
                 self.visit_expr(expr);
@@ -498,7 +487,8 @@ impl Visitor for ResolveSymbols {
             Expr::Ident(Spanned(ident_expr @ IdentExpr { ident }, _)) => {
                 // Lookup the binding for this ident.
                 let resolved_binding = self.resolve_binding(&ident);
-                self.bindings_map
+                self.db
+                    .bindings_map
                     .idents
                     .insert(ident_expr, resolved_binding);
             }
@@ -514,11 +504,11 @@ impl Visitor for ResolveSymbols {
                         // Try to resolve this as a data-constructor. If not, then create a new
                         // binding.
                         match self.try_resolve_binding(ident) {
-                            Some(symbol) if self.bindings[symbol].is_data_constructor => {
+                            Some(symbol) if self.db.bindings[symbol].is_data_constructor => {
                                 // Make sure that we have the right number of args.
-                                let expected = self.bindings[symbol].data_constructor_args;
+                                let expected = self.db.bindings[symbol].data_constructor_args;
                                 if expected != 0 {
-                                    self.diagnostics.add(
+                                    self.db.diagnostics.add(
                                         WrongNumberOfArgsForDataConstructorInPattern {
                                             span: ident.span(),
                                             ident: ident.clone(),
@@ -527,14 +517,15 @@ impl Visitor for ResolveSymbols {
                                         },
                                     );
                                 }
-                                self.bindings_map
+                                self.db
+                                    .bindings_map
                                     .pattern_tags
                                     .insert(pattern, ResolvedBinding::Ok(symbol));
                             }
                             _ => {
                                 let binding =
                                     self.new_binding_scope(Binding::new(ident.as_ref().clone()));
-                                self.bindings_map.pattern.insert(pattern, binding);
+                                self.db.bindings_map.pattern.insert(pattern, binding);
                             }
                         }
                     }
@@ -545,16 +536,17 @@ impl Visitor for ResolveSymbols {
                 [ident] => {
                     let symbol = self.resolve_binding(ident);
                     if let ResolvedBinding::Ok(symbol) = symbol {
-                        if !self.bindings[symbol].is_data_constructor {
-                            self.diagnostics.add(NotADataConstructor {
+                        if !self.db.bindings[symbol].is_data_constructor {
+                            self.db.diagnostics.add(NotADataConstructor {
                                 span: ident.span(),
                                 path: adt.tag.clone(),
                             })
                         }
                         // Make sure that we have the right number of args.
-                        let expected = self.bindings[symbol].data_constructor_args;
+                        let expected = self.db.bindings[symbol].data_constructor_args;
                         if expected != adt.of.len() {
-                            self.diagnostics
+                            self.db
+                                .diagnostics
                                 .add(WrongNumberOfArgsForDataConstructorInPattern {
                                     span: ident.span(),
                                     ident: ident.clone(),
@@ -563,7 +555,7 @@ impl Visitor for ResolveSymbols {
                                 });
                         }
                     }
-                    self.bindings_map.pattern_tags.insert(pattern, symbol);
+                    self.db.bindings_map.pattern_tags.insert(pattern, symbol);
                 }
                 _ => todo!("modules"),
             },
@@ -571,302 +563,6 @@ impl Visitor for ResolveSymbols {
             Pattern::Err => {}
         }
         walk_pattern(self, pattern);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TypeSymbol {
-    Path(Ident),
-    Param(Ident),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedType {
-    Ident(TypeId),
-    Tuple(Vec<Self>),
-    Fn {
-        arg: Box<Self>,
-        ret: Box<Self>,
-    },
-    Constructed {
-        constructor: Box<Self>,
-        arg: Box<Self>,
-    },
-    // Built-in types.
-    Bool,
-    Int,
-    Float,
-    String,
-    Char,
-    /// A type parameter.
-    ///
-    /// Unlike type variables, these are initially universally quantified, such that constraining
-    /// the type param to a specific type is a contradiction (since there is more than a single
-    /// type in the domain).
-    Param(TypeVar),
-    /// A type variable. This can either be free or bound. Type vars can not be explicitly
-    /// referenced (TODO: update when inferred types are added).
-    ///
-    /// Since identifiers cannot start with numbers, automatically generated type vars are always
-    /// integers.
-    Var(TypeVar),
-    /// Universal types.
-    /// `'a . f('a)` where `f` is any type potentially containing `'a`.
-    ForAll {
-        var: TypeVar,
-        ty: Box<Self>,
-    },
-    /// Type could not be resolved.
-    Err,
-}
-
-pub type TypeVar = SmolStr;
-
-impl ResolvedType {
-    /// Create a new resolved type representing a curried function.
-    ///
-    /// For example, a function with params `a`, `b`, `c` and return value `ret` would become the
-    /// type `a -> (b -> (c -> ret))`.
-    pub fn new_curried_function(args: &[Self], ret: Self) -> Self {
-        match args.split_first() {
-            Some((first, rest @ [_, ..])) => Self::Fn {
-                arg: Box::new(first.clone()),
-                ret: Box::new(Self::new_curried_function(rest, ret)),
-            },
-            Some((first, _rest @ [])) => Self::Fn {
-                arg: Box::new(first.clone()),
-                ret: Box::new(ret),
-            },
-            None => ret,
-        }
-    }
-
-    /// Uncurries a function.
-    pub fn uncurry_function(self) -> (Vec<Self>, Self) {
-        match self {
-            Self::Fn { arg, ret } => {
-                let (mut args, ret) = ret.uncurry_function();
-                args.insert(0, *arg);
-                (args, ret)
-            }
-            _ => (Vec::new(), self),
-        }
-    }
-
-    /// Create a new resolved type representing a curried constructed type.
-    ///
-    /// For example, a type `foo` with type params `'a`, `'b` would become the type `(foo 'a) 'b`.
-    pub fn new_curried_constructed_ty(constructor: Self, args: &[Self]) -> Self {
-        match args.split_first() {
-            Some((first, rest @ [_, ..])) => Self::new_curried_constructed_ty(
-                Self::Constructed {
-                    constructor: Box::new(constructor.clone()),
-                    arg: Box::new(first.clone()),
-                },
-                rest,
-            ),
-            Some((first, _rest @ [])) => Self::Constructed {
-                constructor: Box::new(constructor.clone()),
-                arg: Box::new(first.clone()),
-            },
-            None => constructor,
-        }
-    }
-
-    /// Create a new resolved type referring to a type item.
-    pub fn of_type_item(id: TypeId, type_item_map: &ArenaMap<TypeId, DataDef>) -> Self {
-        let ty_params = type_item_map[id]
-            .ty_params
-            .iter()
-            .map(|param| Self::Var(param.ident.as_ref().clone().into()))
-            .collect::<Vec<_>>();
-        Self::new_curried_constructed_ty(Self::Ident(id), &ty_params)
-    }
-
-    pub fn ident_of_constructed(&self) -> Option<TypeId> {
-        match self {
-            Self::Ident(id) => Some(*id),
-            Self::Constructed {
-                constructor,
-                arg: _,
-            } => constructor.ident_of_constructed(),
-            _ => None,
-        }
-    }
-
-    fn num_of_constructed(&self) -> usize {
-        match self {
-            Self::Constructed {
-                constructor,
-                arg: _,
-            } => constructor.num_of_constructed() + 1,
-            _ => 0,
-        }
-    }
-
-    /// Pretty print the type.
-    pub fn pretty<'a>(&'a self, map: &'a ArenaMap<TypeId, DataDef>) -> ResolvedTypePretty<'a> {
-        ResolvedTypePretty(self, map)
-    }
-}
-
-/// Pretty printer for [`ResolvedType`].
-pub struct ResolvedTypePretty<'a>(&'a ResolvedType, &'a ArenaMap<TypeId, DataDef>);
-impl<'a> fmt::Display for ResolvedTypePretty<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            ResolvedType::Ident(id) => write!(f, "{}", self.1[*id].ident)?,
-            ResolvedType::Tuple(types) => {
-                write!(f, "(")?;
-                if let Some(first) = types.first() {
-                    write!(f, "{}", first.pretty(self.1))?;
-                }
-                for ty in types.iter().skip(1) {
-                    write!(f, ", {}", ty.pretty(self.1))?;
-                }
-                write!(f, ")")?;
-            }
-            ResolvedType::Fn { arg, ret } => {
-                write!(f, "({} -> {})", arg.pretty(self.1), ret.pretty(self.1))?
-            }
-            ResolvedType::Constructed { constructor, arg } => {
-                write!(f, "({} {})", constructor.pretty(self.1), arg.pretty(self.1))?
-            }
-            ResolvedType::Bool => write!(f, "bool")?,
-            ResolvedType::Int => write!(f, "int")?,
-            ResolvedType::Float => write!(f, "float")?,
-            ResolvedType::String => write!(f, "string")?,
-            ResolvedType::Char => write!(f, "char")?,
-            ResolvedType::Param(var) => write!(f, "'{var}")?,
-            ResolvedType::Var(var) => write!(f, "{{{var}}}")?,
-            ResolvedType::ForAll { var, ty } => write!(f, "forall '{var} . {}", ty.pretty(self.1))?,
-            ResolvedType::Err => write!(f, "ERR")?,
-        }
-
-        Ok(())
-    }
-}
-
-/// Information about type data.
-#[derive(Debug)]
-pub struct DataDef {
-    pub ident: Spanned<Ident>,
-    pub kind: TypeKind,
-    pub ty_params: Vec<Spanned<TypeParam>>,
-    pub span: Span,
-}
-#[derive(Debug)]
-pub enum TypeKind {
-    Record(RecordSymbol),
-    Adt(AdtSymbol),
-    /// Temporary dummy variable.
-    Tmp,
-}
-impl TypeKind {
-    pub fn as_record(&self) -> Option<&RecordSymbol> {
-        if let Self::Record(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_adt(&self) -> Option<&AdtSymbol> {
-        if let Self::Adt(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-}
-#[derive(Debug)]
-pub struct RecordSymbol {
-    pub fields: HashMap<Ident, ResolvedType>,
-}
-#[derive(Debug)]
-pub struct AdtSymbol {
-    pub variants: Vec<AdtVariant>,
-}
-#[derive(Debug)]
-pub struct AdtVariant {
-    pub ident: Ident,
-    pub types: Vec<ResolvedType>,
-}
-
-#[derive(Debug, Default)]
-pub struct TypesMap {
-    pub items: ArenaMap<TypeId, DataDef>,
-    pub types: NodeMap<Type, ResolvedType>,
-}
-
-#[derive(Debug, Default)]
-pub struct BindingsMap {
-    /// Mapping from identifiers to their bindings.
-    pub idents: NodeMap<IdentExpr, ResolvedBinding>,
-    /// Mapping from data-constructors to their bindings. Data-constructors are treated just like
-    /// functions.
-    pub data_constructors: NodeMap<DataConstructor, BindingId>,
-    /// Mapping from let params to their bindings.
-    pub params: NodeMap<Param, BindingId>,
-    /// Mapping from let items to their bindings.
-    pub let_items: NodeMap<LetItem, BindingId>,
-    /// Mapping from let expressions to their bindings.
-    pub let_exprs: NodeMap<LetExpr, BindingId>,
-    /// Mapping from lambda params to their bindings.
-    pub lambda_params: NodeMap<LambdaParam, BindingId>,
-    /// Mapping from pattern bindings to their bindings.
-    pub pattern: NodeMap<Pattern, BindingId>,
-    /// Mapping from pattern tags to their bindings.
-    pub pattern_tags: NodeMap<Pattern, ResolvedBinding>,
-}
-
-pub type BindingId = Idx<Binding>;
-
-/// Represents a symbol that can be referred to by an identifier.
-#[derive(Debug)]
-pub struct Binding {
-    pub ident: Ident,
-    pub is_data_constructor: bool,
-    /// The number of arguments that is expected for this data-constructor.
-    pub data_constructor_args: usize,
-    /// The tag of sum type constructed by the data-constructor.
-    pub data_constructor_tag: u32,
-}
-
-impl Binding {
-    /// Create a new binding that is __NOT__ a data-constructor.
-    pub fn new(ident: Ident) -> Self {
-        Self {
-            ident,
-            is_data_constructor: false,
-            data_constructor_args: 0, // TODO: do not have dummy field.
-            data_constructor_tag: 0,  // TODO: above
-        }
-    }
-
-    /// Create a new binding that is a data-constructor.
-    pub fn new_data_constructor(ident: Ident, args: usize, tag: u32) -> Self {
-        Self {
-            ident,
-            is_data_constructor: true,
-            data_constructor_args: args,
-            data_constructor_tag: tag,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResolvedBinding {
-    Ok(BindingId),
-    Err,
-}
-
-impl ResolvedBinding {
-    pub fn unwrap(self) -> BindingId {
-        match self {
-            ResolvedBinding::Ok(id) => id,
-            ResolvedBinding::Err => panic!("unwrapping an errored resolved binding"),
-        }
     }
 }
 

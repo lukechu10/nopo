@@ -1,27 +1,21 @@
 //! Code generation.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
-use la_arena::{Arena, ArenaMap};
+use la_arena::ArenaMap;
 use nopo_diagnostics::span::Spanned;
 use nopo_parser::ast::{Expr, LetId, LetItem, LitExpr, Pattern, Root, TypeDef, TypeId, TypeItem};
 use nopo_parser::lexer::{BinOp, UnaryOp};
 use nopo_parser::visitor::{walk_root, Visitor};
-use nopo_passes::resolve::{Binding, BindingId, BindingsMap, ResolvedType, TypesMap};
-use nopo_passes::unify::UnifyTypes;
+use nopo_passes::db::{BindingId, Db};
 
 use crate::print::print_chunk;
 use crate::types::Instr::*;
 use crate::types::{Chunk, ChunkBuilder, Instr, ObjClosure, ObjProto, Object, Value, VmIndex};
 
 #[derive(Debug)]
-pub struct Codegen {
-    bindings: Arena<Binding>,
-    bindings_map: BindingsMap,
-    /// Contains the type of all the bindings.
-    _binding_types_map: HashMap<BindingId, ResolvedType>,
-    _types_map: TypesMap,
+pub struct Codegen<'a> {
+    db: &'a Db,
     offset_map: ArenaMap<BindingId, BindingOffset>,
     chunks: Vec<ChunkBuilder>,
 }
@@ -41,13 +35,10 @@ enum BindingKind {
     Local,
 }
 
-impl Codegen {
-    pub fn new(unify: UnifyTypes) -> Self {
+impl<'a> Codegen<'a> {
+    pub fn new(db: &'a Db) -> Self {
         Self {
-            bindings: unify.bindings,
-            bindings_map: unify.bindings_map,
-            _binding_types_map: unify.binding_types_map,
-            _types_map: unify.types_map,
+            db,
             offset_map: ArenaMap::new(),
             chunks: Vec::new(),
         }
@@ -146,7 +137,7 @@ impl Codegen {
     }
 }
 
-impl Visitor for Codegen {
+impl<'a> Visitor for Codegen<'a> {
     fn visit_root(&mut self, root: &Root) {
         self.new_chunk("<global>".to_string(), 0);
         walk_root(self, root);
@@ -156,7 +147,7 @@ impl Visitor for Codegen {
         match &*item.def {
             TypeDef::Adt(adt) => {
                 for (tag, data_constructor) in adt.data_constructors.iter().enumerate() {
-                    let binding = self.bindings_map.data_constructors[&data_constructor];
+                    let binding = self.db.bindings_map.data_constructors[&data_constructor];
                     // Create a lambda that calls the data constructor.
                     self.new_chunk(
                         data_constructor.ident.to_string(),
@@ -195,7 +186,7 @@ impl Visitor for Codegen {
     }
 
     fn visit_let_item(&mut self, _idx: LetId, item: &Spanned<LetItem>) {
-        let binding = self.bindings_map.let_items[item];
+        let binding = self.db.bindings_map.let_items[item];
         // If let item has params, generate a closure. Otherwise, just evaluate value and push onto
         // global stack.
         match item.params.len() {
@@ -207,7 +198,7 @@ impl Visitor for Codegen {
                 self.new_binding_at_top(binding, BindingKind::Global);
                 self.new_chunk(item.ident.to_string(), arity as u32);
                 for (i, param) in item.params.iter().enumerate() {
-                    let binding = self.bindings_map.params[&*param];
+                    let binding = self.db.bindings_map.params[&*param];
                     self.new_binding_at_pos(binding, BindingKind::Local, i as u32);
                 }
                 self.visit_expr(&item.expr);
@@ -229,7 +220,7 @@ impl Visitor for Codegen {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &**expr {
             Expr::Ident(ident_expr) => {
-                let binding = self.bindings_map.idents[&*ident_expr].unwrap();
+                let binding = self.db.bindings_map.idents[&*ident_expr].unwrap();
                 let data = self.offset_map[binding];
                 match data.kind {
                     BindingKind::GlobalDataConstructor { tag, arity } if arity == 0 => {
@@ -254,7 +245,7 @@ impl Visitor for Codegen {
 
                 self.new_chunk("<lambda>".to_string(), arity as u32);
                 for (i, param) in lambda_expr.params.iter().enumerate() {
-                    let binding = self.bindings_map.lambda_params[&*param];
+                    let binding = self.db.bindings_map.lambda_params[&*param];
                     self.new_binding_at_pos(binding, BindingKind::Local, i as u32);
                 }
                 self.visit_expr(&lambda_expr.expr);
@@ -290,7 +281,7 @@ impl Visitor for Codegen {
                 assert!(!args.is_empty());
 
                 let data = if let Expr::Ident(ident_expr) = &**callee {
-                    let binding = self.bindings_map.idents[&*ident_expr].unwrap();
+                    let binding = self.db.bindings_map.idents[&*ident_expr].unwrap();
                     Some(self.offset_map[binding])
                 } else {
                     None
@@ -442,7 +433,7 @@ impl Visitor for Codegen {
             Expr::Loop(_) => todo!(),
             Expr::Return(_) => todo!(),
             Expr::Let(let_expr) => {
-                let binding = self.bindings_map.let_exprs[&*let_expr];
+                let binding = self.db.bindings_map.let_exprs[&*let_expr];
                 let kind = if self.chunks.len() == 1 {
                     BindingKind::Global
                 } else {
@@ -465,9 +456,9 @@ impl Visitor for Codegen {
     fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
         match &**pattern {
             Pattern::Path(_path) => {
-                if let Some(symbol) = self.bindings_map.pattern_tags.get(pattern) {
+                if let Some(symbol) = self.db.bindings_map.pattern_tags.get(pattern) {
                     let symbol = symbol.unwrap();
-                    let tag = self.bindings[symbol].data_constructor_tag;
+                    let tag = self.db.bindings[symbol].data_constructor_tag;
                     self.chunk().write(HasTag(tag));
                 } else {
                     // Bindings match everything.
@@ -475,8 +466,8 @@ impl Visitor for Codegen {
                 }
             }
             Pattern::Adt(adt) => {
-                let symbol = self.bindings_map.pattern_tags[pattern].unwrap();
-                let tag = self.bindings[symbol].data_constructor_tag;
+                let symbol = self.db.bindings_map.pattern_tags[pattern].unwrap();
+                let tag = self.db.bindings[symbol].data_constructor_tag;
                 // First check if we have the right tag.
                 self.chunk().write(HasTag(tag));
 
@@ -494,7 +485,7 @@ impl Visitor for Codegen {
                 for (field, sub_pattern) in adt.of.iter().enumerate() {
                     // If the sub-pattern is just a binding, don't even bother checking if it
                     // matches since it matches trivially.
-                    if self.bindings_map.pattern.get(sub_pattern).is_none() {
+                    if self.db.bindings_map.pattern.get(sub_pattern).is_none() {
                         conjuncts += 1;
                         self.chunk().write(GetField(field as u32));
                         self.visit_pattern(sub_pattern);
@@ -540,13 +531,13 @@ impl Visitor for Codegen {
     }
 }
 
-impl Codegen {
+impl<'a> Codegen<'a> {
     // Create the bindings used in this pattern.
     // Does not remove the original top value of the stack.
     fn visit_pattern_bindings(&mut self, pattern: &Spanned<Pattern>) {
         match &**pattern {
             Pattern::Path(_) => {
-                if let Some(&binding) = self.bindings_map.pattern.get(pattern) {
+                if let Some(&binding) = self.db.bindings_map.pattern.get(pattern) {
                     let kind = if self.chunks.len() == 1 {
                         BindingKind::Global
                     } else {

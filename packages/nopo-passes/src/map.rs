@@ -21,7 +21,7 @@ impl<N, T> NodeMap<N, T> {
     }
 
     /// Get the value for the [`N`].
-    pub fn get(&mut self, key: &N) -> Option<&T> {
+    pub fn get(&self, key: &N) -> Option<&T> {
         self.map.get(&(key as *const N))
     }
 }

@@ -31,11 +31,11 @@ fn entry() -> Result<(), Box<dyn Error>> {
         if !diagnostics.eprint(&parse_result.file_id_map) {
             return Ok(());
         }
-        let unify = run_resolution_passes(parse_result.get_entry_root(), diagnostics.clone());
+        let db = run_resolution_passes(parse_result.get_entry_root(), diagnostics.clone());
         if !diagnostics.eprint(&parse_result.file_id_map) {
             return Ok(());
         }
-        compile_and_run(parse_result.get_entry_root(), unify.unwrap());
+        compile_and_run(parse_result.get_entry_root(), &db);
         Ok(())
     } else {
         repl::start_repl()

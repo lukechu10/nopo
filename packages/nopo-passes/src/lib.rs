@@ -1,4 +1,5 @@
 pub mod check_records;
+pub mod db;
 pub mod map;
 pub mod resolve;
 pub mod unify;
@@ -10,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use db::Db;
 use nopo_diagnostics::Diagnostics;
 use thiserror::Error;
 
@@ -200,13 +202,15 @@ pub fn parse_files_recursive(
     })
 }
 
-pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) -> Option<UnifyTypes> {
-    let mut resolve = ResolveSymbols::new(diagnostics.clone());
+pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) -> Db {
+    let mut db = Db::new();
+
+    let mut resolve = ResolveSymbols::new(&mut db);
     resolve.visit_root(root);
     if !diagnostics.is_empty() {
-        return None;
+        return db;
     }
-    let mut unify = UnifyTypes::new(resolve, diagnostics.clone());
+    let mut unify = UnifyTypes::new(&mut db);
     unify.visit_root(root);
-    Some(unify)
+    db
 }
