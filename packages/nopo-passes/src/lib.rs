@@ -203,7 +203,7 @@ pub fn parse_files_recursive(
 }
 
 pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) -> Db {
-    let mut db = Db::new();
+    let mut db = Db::new(diagnostics.clone());
 
     let mut resolve = ResolveSymbols::new(&mut db);
     resolve.visit_root(root);

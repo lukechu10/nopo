@@ -15,7 +15,7 @@ use smol_str::SmolStr;
 
 use crate::map::NodeMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Db {
     pub bindings: Arena<Binding>,
 
@@ -33,8 +33,14 @@ pub struct Db {
 }
 
 impl Db {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(diagnostics: Diagnostics) -> Self {
+        Self {
+            bindings: Arena::default(),
+            bindings_map: BindingsMap::default(),
+            types_map: TypesMap::default(),
+            binding_types_map: HashMap::default(),
+            diagnostics,
+        }
     }
 }
 
