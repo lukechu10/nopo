@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use crate::print::print_chunk;
 use crate::types::{ChunkBuilder, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray};
 
 #[derive(Debug)]
@@ -92,7 +91,6 @@ impl Vm {
             }
             chunk.write(Instr::Calli { args: callee_arity });
             let chunk = chunk.into_chunk();
-            print_chunk(&chunk, &mut std::io::stderr()).unwrap();
             let closure = ObjClosure {
                 proto: ObjProto {
                     chunk: Rc::new(chunk),
@@ -107,7 +105,7 @@ impl Vm {
             self.call_stack.push(CallFrame {
                 ip: 0,
                 frame_pointer: self.stack.len() - callee_arity as usize,
-                is_call_global: true,
+                is_call_global: false,
                 closure,
             });
         } else {
@@ -118,7 +116,7 @@ impl Vm {
             // Get the new closure on the top of the stack.
             // We need to run this new frame to completion to get the value of the closre.
             self.calli(callee_arity);
-            self.run_frame();
+            self.run();
 
             for value in extra {
                 self.stack.push(value);
@@ -149,7 +147,6 @@ impl Vm {
                 args: callee_arity,
             });
             let chunk = chunk.into_chunk();
-            print_chunk(&chunk, &mut std::io::stderr()).unwrap();
             let closure = ObjClosure {
                 proto: ObjProto {
                     chunk: Rc::new(chunk),
@@ -175,7 +172,7 @@ impl Vm {
             // Get the new closure on the top of the stack.
             // We need to run this new frame to completion to get the value of the closre.
             self.call_global(idx, callee_arity);
-            self.run_frame();
+            self.run();
 
             for value in extra {
                 self.stack.push(value);
