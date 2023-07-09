@@ -23,6 +23,8 @@ pub enum Token {
     Colon,
     #[token(";")]
     Semi,
+    #[token("@")]
+    At,
     #[token("->")]
     RArrow,
     #[token("'")]
@@ -164,6 +166,7 @@ impl fmt::Display for Token {
             Token::Dot => "`.`",
             Token::Colon => "`:`",
             Token::Semi => "`;`",
+            Token::At => "`@`",
             Token::RArrow => "`->`",
             Token::Prime => "`'`",
             Token::BackSlash => "`\\`",

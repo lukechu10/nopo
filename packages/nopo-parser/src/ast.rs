@@ -172,6 +172,8 @@ pub enum Expr {
 
     Let(Spanned<LetExpr>),
 
+    Macro(Spanned<MacroExpr>),
+
     Err,
 }
 
@@ -291,6 +293,12 @@ pub struct LetExpr {
     pub ret_ty: Option<Spanned<Type>>,
     pub expr: Box<Spanned<Expr>>,
     pub _in: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MacroExpr {
+    pub ident: Spanned<Ident>,
+    pub expr: Box<Spanned<Expr>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

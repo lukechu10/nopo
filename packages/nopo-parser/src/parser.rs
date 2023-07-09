@@ -682,6 +682,10 @@ impl Parser {
                 let expr = self.parse_if_expr();
                 self.finish(start, Expr::If(expr))
             }
+            Token::At => {
+                let expr = self.parse_macro_expr();
+                self.finish(start, Expr::Macro(expr))
+            }
             Token::KwMatch => {
                 let expr = self.parse_match_expr();
                 self.finish(start, Expr::Match(expr))
@@ -1032,6 +1036,20 @@ impl Parser {
                 ret_ty,
                 expr: Box::new(expr),
                 _in: Box::new(_in),
+            },
+        )
+    }
+
+    pub fn parse_macro_expr(&mut self) -> Spanned<MacroExpr> {
+        let start = self.start();
+        self.expect(Token::At);
+        let ident = self.parse_ident();
+        let expr = self.parse_primary_expr();
+        self.finish(
+            start,
+            MacroExpr {
+                ident,
+                expr: Box::new(expr),
             },
         )
     }

@@ -445,6 +445,7 @@ impl<'a> Visitor for Codegen<'a> {
                 self.visit_expr(&let_expr._in);
                 self.chunk().write(Slide(1));
             }
+            Expr::Macro(_) => unreachable!(),
             Expr::Err => unreachable!(),
         }
     }

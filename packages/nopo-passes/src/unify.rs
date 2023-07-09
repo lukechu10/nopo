@@ -413,6 +413,7 @@ impl<'a> Visitor for UnifyTypes<'a> {
             Expr::Let(_) => unreachable!(),
             Expr::Lambda(_) => unreachable!(),
             Expr::Match(_) => unreachable!(),
+            Expr::Macro(_) => unreachable!(),
             Expr::Err => unreachable!(),
         };
         self.state.expr_types_map.insert(expr, c_ty);
