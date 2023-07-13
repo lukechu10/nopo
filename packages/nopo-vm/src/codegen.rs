@@ -112,12 +112,12 @@ impl<'a> Codegen<'a> {
         // Bottom most scope should capture a local variable.
         let mut offset = add_upvalue_to_chunk(
             &mut self.chunks[decl_depth + 1],
-            Instr::LoadLocal(offset_data.offset),
+            LoadLocal(offset_data.offset),
         );
         // Scopes after that should capture upvalue from previous scope.
         if decl_depth + 2 < current_depth {
             for i in decl_depth + 2..current_depth {
-                offset = add_upvalue_to_chunk(&mut self.chunks[i], Instr::LoadUpValue(offset));
+                offset = add_upvalue_to_chunk(&mut self.chunks[i], LoadUpValue(offset));
             }
         }
 
@@ -270,12 +270,26 @@ impl<'a> Visitor for Codegen<'a> {
                 for expr in &tuple_expr.elements {
                     self.visit_expr(expr);
                 }
-                self.chunk().write(Instr::MakeTuple {
+                self.chunk().write(MakeTuple {
                     args: tuple_expr.elements.len() as u32,
                 });
             }
-            Expr::Record(_) => todo!(),
-            Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => todo!("dot expr"),
+            Expr::Record(record_expr) => {
+                // Get all the fields and push in order of position in record.
+                let mut fields = record_expr.fields.iter().collect::<Vec<_>>();
+                fields.sort_by_cached_key(|field| self.db.record_expr_field_map[field]);
+                for field in &fields {
+                    self.visit_expr(&field.expr);
+                }
+                self.chunk().write(MakeTuple {
+                    args: fields.len() as u32,
+                });
+            }
+            Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => {
+                let field_pos = self.db.record_field_map[&*expr];
+                self.visit_expr(&bin_expr.lhs);
+                self.chunk().write(GetField(field_pos));
+            }
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::FnCall => {
                 let (callee, args) = get_fn_call_callee_and_args(expr);
                 assert!(!args.is_empty());

@@ -402,10 +402,11 @@ impl<'a> Visitor for ResolveSymbols<'a> {
                 fields: record
                     .fields
                     .iter()
-                    .map(|field| {
+                    .enumerate()
+                    .map(|(i, field)| {
                         (
                             field.ident.as_ref().clone(),
-                            self.db.types_map.types[&field.ty].clone(),
+                            (self.db.types_map.types[&field.ty].clone(), i as u32),
                         )
                     })
                     .collect(),

@@ -8,8 +8,8 @@ use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::span::{Span, Spanned};
 use nopo_diagnostics::Diagnostics;
 use nopo_parser::ast::{
-    DataConstructor, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, Param, Pattern, Type, TypeId,
-    TypeParam,
+    DataConstructor, Expr, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, Param, Pattern,
+    RecordFieldExpr, Type, TypeId, TypeParam,
 };
 use smol_str::SmolStr;
 
@@ -29,6 +29,12 @@ pub struct Db {
     /// Contains the type of all the bindings.
     pub binding_types_map: HashMap<BindingId, ResolvedType>,
 
+    // `TypeCheckRecords`
+    /// Map from identifiers to the field position in the record.
+    pub record_field_map: NodeMap<Expr, u32>,
+    /// Map from record field expressions to the field position in the record.
+    pub record_expr_field_map: NodeMap<RecordFieldExpr, u32>,
+
     pub diagnostics: Diagnostics,
 }
 
@@ -39,6 +45,8 @@ impl Db {
             bindings_map: BindingsMap::default(),
             types_map: TypesMap::default(),
             binding_types_map: HashMap::default(),
+            record_field_map: NodeMap::default(),
+            record_expr_field_map: NodeMap::default(),
             diagnostics,
         }
     }
@@ -298,14 +306,18 @@ impl TypeKind {
         }
     }
 }
+
 #[derive(Debug)]
 pub struct RecordSymbol {
-    pub fields: HashMap<Ident, ResolvedType>,
+    /// A map from the identifier to the resolved type and the position of the field in the record.
+    pub fields: HashMap<Ident, (ResolvedType, u32)>,
 }
+
 #[derive(Debug)]
 pub struct AdtSymbol {
     pub variants: Vec<AdtVariant>,
 }
+
 #[derive(Debug)]
 pub struct AdtVariant {
     pub ident: Ident,

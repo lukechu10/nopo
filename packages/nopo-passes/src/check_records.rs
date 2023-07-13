@@ -73,14 +73,18 @@ impl<'a> TypeCheckRecords<'a> {
 }
 
 impl<'a> TypeCheckRecords<'a> {
-    fn resolve_field_ty(&mut self, expr: &Spanned<Expr>, field: &Spanned<Expr>) -> ResolvedType {
+    fn resolve_field(
+        &mut self,
+        expr: &Spanned<Expr>,
+        field: &Spanned<Expr>,
+    ) -> (ResolvedType, u32) {
         // Check that field is an identifier.
         let Expr::Ident(field) = &**field else {
             self.db.diagnostics.add(FieldMustBeIdentifier {
                 span: field.span(),
                 expr: field.span(),
             });
-            return ResolvedType::Err;
+            return (ResolvedType::Err, 0);
         };
         let ty = &mut self.state.expr_types_map[&*expr];
 
@@ -89,19 +93,19 @@ impl<'a> TypeCheckRecords<'a> {
                 span: expr.span(),
                 expr: expr.span(),
             });
-            ResolvedType::Err
+            (ResolvedType::Err, 0)
         } else if let Some(id) = ty.ident_of_constructed() {
             let data_def = &self.db.types_map.items[id];
             match &data_def.kind {
                 TypeKind::Record(record_def) => match record_def.fields.get(field.ident.as_ref()) {
-                    Some(ty) => ty.clone(),
+                    Some((ty, i)) => (ty.clone(), *i),
                     None => {
                         self.db.diagnostics.add(UnknownField {
                             span: field.span(),
                             field: field.ident.clone(),
                             ty: ty.pretty(&self.db.types_map.items),
                         });
-                        ResolvedType::Err
+                        (ResolvedType::Err, 0)
                     }
                 },
                 TypeKind::Adt(_) => {
@@ -110,7 +114,7 @@ impl<'a> TypeCheckRecords<'a> {
                         expr: expr.span(),
                         ty: ty.pretty(&self.db.types_map.items),
                     });
-                    ResolvedType::Err
+                    (ResolvedType::Err, 0)
                 }
                 TypeKind::Tmp => unreachable!(),
             }
@@ -120,7 +124,7 @@ impl<'a> TypeCheckRecords<'a> {
                 expr: expr.span(),
                 ty: ty.pretty(&self.db.types_map.items),
             });
-            ResolvedType::Err
+            (ResolvedType::Err, 0)
         }
     }
 }
@@ -131,15 +135,12 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
         match &**expr {
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => {
                 let c_ty = self.state.expr_types_map[&*expr].clone();
-                // assert!(
-                //     matches!(c_ty, ResolvedType::Var(_)),
-                //     "record type should not be inferred yet"
-                // );
-                let c_expr = self.resolve_field_ty(&bin_expr.lhs, &bin_expr.rhs);
+                let (c_expr, i) = self.resolve_field(&bin_expr.lhs, &bin_expr.rhs);
                 self.state.constraints.push(Constraint(
                     spanned(bin_expr.rhs.span(), c_expr),
                     spanned(bin_expr.rhs.span(), c_ty),
                 ));
+                self.db.record_field_map.insert(expr, i);
             }
             Expr::Record(record_expr) => {
                 let ty = &self.state.expr_types_map[&*expr];
@@ -164,7 +165,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                             }
                             // Check if any field is missing and add constraints on field types.
                             let mut missing = Vec::new();
-                            for (ident, field_ty) in &record_def.fields {
+                            for (ident, (field_ty, field_pos)) in &record_def.fields {
                                 let Some(field) = record_expr.fields.iter().find(|field| &*field.ident == ident) else {
                                     missing.push(format!("`{ident}`"));
                                     continue;
@@ -174,6 +175,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                                     spanned(field.expr.span(), c_expr),
                                     spanned(field.ident.span(), field_ty.clone()),
                                 ));
+                                self.db.record_expr_field_map.insert(field, *field_pos);
                             }
                             if !missing.is_empty() {
                                 self.db.diagnostics.add(MissingFields {
