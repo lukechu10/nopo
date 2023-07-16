@@ -350,6 +350,15 @@ impl From<Ident> for SmolStr {
     }
 }
 
+impl PartialEq<str> for Ident {
+    fn eq(&self, other: &str) -> bool {
+        match self {
+            Ident::Ok(str) => str == other,
+            Ident::Err => false,
+        }
+    }
+}
+
 // Pretty printing implementations.
 
 impl fmt::Display for Ident {

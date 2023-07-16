@@ -1,4 +1,5 @@
 pub mod check_records;
+pub mod collect_modules;
 pub mod db;
 pub mod map;
 pub mod resolve;
