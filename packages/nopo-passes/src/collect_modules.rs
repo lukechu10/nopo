@@ -1,8 +1,12 @@
+use std::path::{Path, PathBuf};
+
 use nopo_diagnostics::span::{spanned, Span, Spanned};
-use nopo_diagnostics::{Diagnostics, Report};
+use nopo_diagnostics::Report;
 use nopo_parser::ast::{BinaryExpr, Expr, LitExpr};
 use nopo_parser::lexer::BinOp;
 use nopo_parser::visitor::{walk_expr, Visitor};
+
+use crate::db::Db;
 
 #[derive(Report)]
 #[kind("error")]
@@ -13,22 +17,25 @@ struct InvalidImportPath {
     expr: Span,
 }
 
+#[derive(Debug, Clone)]
 pub enum ModulePath {
     Relative(String),
     Absolute(Vec<String>),
 }
 
 /// Get all the import expressions to build the module graph.
-pub struct CollectModules {
-    modules: Vec<Spanned<ModulePath>>,
-    diagnostics: Diagnostics,
+pub struct CollectModules<'a> {
+    pub modules: Vec<Spanned<ModulePath>>,
+    parent: PathBuf,
+    db: &'a mut Db,
 }
 
-impl CollectModules {
-    pub fn new(diagnostics: Diagnostics) -> Self {
+impl<'a> CollectModules<'a> {
+    pub fn new(parent: PathBuf, db: &'a mut Db) -> Self {
         Self {
             modules: Vec::new(),
-            diagnostics,
+            parent,
+            db,
         }
     }
 }
@@ -59,23 +66,38 @@ impl ModulePath {
             _ => None,
         }
     }
+
+    pub fn resolve(self, parent: &Path) -> Result<PathBuf, std::io::Error> {
+        match self {
+            ModulePath::Relative(path) => parent.join(path).canonicalize(),
+            ModulePath::Absolute(_) => todo!("resolve absolute module"),
+        }
+    }
 }
 
-impl Visitor for CollectModules {
+impl<'a> Visitor for CollectModules<'a> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &**expr {
             Expr::Macro(macro_expr) if &*macro_expr.ident == "import" => {
                 let path = match ModulePath::from_expr(&macro_expr.expr) {
                     Some(path) => path,
                     None => {
-                        self.diagnostics.add(InvalidImportPath {
+                        self.db.diagnostics.add(InvalidImportPath {
                             span: macro_expr.span(),
                             expr: macro_expr.span(),
                         });
                         return;
                     }
                 };
-                self.modules.push(spanned(expr.span(), path));
+                self.modules.push(spanned(expr.span(), path.clone()));
+                match path.resolve(&self.parent) {
+                    Ok(resolved) => {
+                        self.db.module_imports_map.insert(macro_expr, resolved);
+                    }
+                    Err(err) => {
+                        todo!("io error: {err}")
+                    }
+                }
             }
             _ => walk_expr(self, expr),
         }

@@ -3,13 +3,14 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::span::{Span, Spanned};
 use nopo_diagnostics::Diagnostics;
 use nopo_parser::ast::{
-    DataConstructor, Expr, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, Param, Pattern,
-    RecordFieldExpr, Type, TypeId, TypeParam,
+    DataConstructor, Expr, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, MacroExpr, Param,
+    Pattern, RecordFieldExpr, Type, TypeId, TypeParam,
 };
 use smol_str::SmolStr;
 
@@ -18,6 +19,10 @@ use crate::map::NodeMap;
 #[derive(Debug)]
 pub struct Db {
     pub bindings: Arena<Binding>,
+
+    // `CollectModules`
+    /// Mapping from import expressions to the canonical path of the module.
+    pub module_imports_map: NodeMap<MacroExpr, PathBuf>,
 
     // `ResolveSymbols`
     /// Mapping from identifiers/let-items/let-exprs etc. to their bindings.
@@ -35,18 +40,24 @@ pub struct Db {
     /// Map from record field expressions to the field position in the record.
     pub record_expr_field_map: NodeMap<RecordFieldExpr, u32>,
 
+    // `GenModuleTypes`
+    /// Map from module (specified by a path) to the type of the module.
+    pub module_types_map: HashMap<PathBuf, RecordSymbol>,
+
     pub diagnostics: Diagnostics,
 }
 
 impl Db {
     pub fn new(diagnostics: Diagnostics) -> Self {
         Self {
+            module_imports_map: NodeMap::default(),
             bindings: Arena::default(),
             bindings_map: BindingsMap::default(),
             types_map: TypesMap::default(),
             binding_types_map: HashMap::default(),
             record_field_map: NodeMap::default(),
             record_expr_field_map: NodeMap::default(),
+            module_types_map: HashMap::default(),
             diagnostics,
         }
     }
@@ -111,6 +122,9 @@ pub enum TypeSymbol {
 pub enum ResolvedType {
     Ident(TypeId),
     Tuple(Vec<Self>),
+    /// Modules have special types because they are only inhabited by the value of the module
+    /// itself. It is also impossible to explicitly refer to a module type.
+    Module(PathBuf),
     Fn {
         arg: Box<Self>,
         ret: Box<Self>,
@@ -253,6 +267,7 @@ impl<'a> fmt::Display for ResolvedTypePretty<'a> {
                 }
                 write!(f, ")")?;
             }
+            ResolvedType::Module(path) => write!(f, "module {{{path:?}}}")?,
             ResolvedType::Fn { arg, ret } => {
                 write!(f, "({} -> {})", arg.pretty(self.1), ret.pretty(self.1))?
             }
@@ -307,7 +322,7 @@ impl TypeKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecordSymbol {
     /// A map from the identifier to the resolved type and the position of the field in the record.
     pub fields: HashMap<Ident, (ResolvedType, u32)>,

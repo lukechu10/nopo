@@ -24,8 +24,6 @@ pub struct Root {
     pub type_items: Arena<Spanned<TypeItem>>,
     /// The order of the items. This is used for variable scoping.
     pub items: Vec<ItemId>,
-    pub mod_items: Vec<Spanned<ModItem>>,
-    pub use_items: Vec<Spanned<UseItem>>,
 }
 
 /// Attributes can be attached to an item.

@@ -226,8 +226,6 @@ impl Parser {
         let mut let_items = Arena::new();
         let mut type_items = Arena::new();
         let mut items = Vec::new();
-        let mut mod_items = Vec::new();
-        let mut use_items = Vec::new();
         while !self.eof() {
             let attrs = self.parse_attributes();
             // If we see a visibility keyword, look at the token after that to decide which branch
@@ -247,14 +245,6 @@ impl Parser {
                     let id = type_items.alloc(item);
                     items.push(ItemId::Type(id));
                 }
-                Token::KwMod => {
-                    let item = self.parse_mod_item(attrs);
-                    mod_items.push(item);
-                }
-                Token::KwUse => {
-                    let item = self.parse_use_item(attrs);
-                    use_items.push(item);
-                }
                 _ => {
                     self.diagnostics.add(ExpectedItem {
                         span: self.peek_span(),
@@ -268,8 +258,6 @@ impl Parser {
             let_items,
             type_items,
             items,
-            mod_items,
-            use_items,
         }
     }
 
@@ -1052,22 +1040,6 @@ impl Parser {
                 expr: Box::new(expr),
             },
         )
-    }
-
-    pub fn parse_mod_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<ModItem> {
-        let start = self.start();
-        let vis = self.parse_vis();
-        self.expect(Token::KwMod);
-        let ident = self.parse_ident();
-        self.finish(start, ModItem { attrs, vis, ident })
-    }
-
-    pub fn parse_use_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<UseItem> {
-        let start = self.start();
-        let vis = self.parse_vis();
-        self.expect(Token::KwUse);
-        let path = self.parse_ident();
-        self.finish(start, UseItem { attrs, vis, path })
     }
 
     pub fn peek_is_pattern(&mut self) -> bool {

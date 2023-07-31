@@ -1,6 +1,7 @@
 pub mod check_records;
 pub mod collect_modules;
 pub mod db;
+pub mod gen_module_type;
 pub mod map;
 pub mod resolve;
 pub mod unify;
@@ -8,18 +9,20 @@ pub mod unify;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use db::Db;
+use indexmap::IndexMap;
+use nopo_diagnostics::span::{FileId, FileIdMap};
 use nopo_diagnostics::Diagnostics;
+use nopo_parser::ast::Root;
+use nopo_parser::parser::Parser;
+use nopo_parser::visitor::Visitor;
 use thiserror::Error;
 
-use nopo_diagnostics::span::{FileId, FileIdMap};
-use nopo_parser::ast::{Ident, Root};
-use nopo_parser::visitor::Visitor;
-
+use self::collect_modules::CollectModules;
+use self::db::Db;
+use self::gen_module_type::GenModuleType;
 use self::resolve::ResolveSymbols;
 use self::unify::UnifyTypes;
 
@@ -63,7 +66,7 @@ fn parse_file(
     }
     let name = path.file_stem().unwrap().to_string_lossy().to_string();
 
-    let mut parser = nopo_parser::parser::Parser::new(file_id, &source, diagnostics);
+    let mut parser = Parser::new(file_id, &source, diagnostics);
     let ast = parser.parse_root();
     Ok(ParsedFile {
         path: path.to_path_buf(),
@@ -73,145 +76,104 @@ fn parse_file(
     })
 }
 
-/// Represents the module path. The entrypoint module is represented by an empty path.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ModPath(Vec<String>);
-
-impl ModPath {
-    /// The [`ModPath`] for the entry file.
-    pub fn entry() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn extend(mut self, ident: String) -> Self {
-        self.0.push(ident);
-        self
-    }
-}
-
-impl fmt::Display for ModPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(first) = self.0.first() {
-            write!(f, "{first}")?;
-        }
-        for segment in self.0.iter().skip(1) {
-            write!(f, ".{segment}")?;
-        }
-        Ok(())
-    }
-}
-
-impl fmt::Debug for ModPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\"{self}\"")
-    }
-}
-
-/// Stores all the ASTs.
-pub struct ParseResult {
-    pub files: BTreeMap<FileId, ParsedFile>,
-    pub mod_path_map: BTreeMap<ModPath, FileId>,
+/// A DAG of all the modules in the program.
+pub struct ModuleGraph {
+    pub files: IndexMap<FileId, ParsedFile>,
     pub file_id_map: FileIdMap,
-    pub entry_file_id: FileId,
 }
 
-impl ParseResult {
-    /// Get the [`Root`] for the entry file.
-    pub fn get_entry_root(&self) -> &Root {
-        &self.files[&self.entry_file_id].ast
+impl ModuleGraph {
+    /// Runs resolution passes on the module graph. The leaf modules are checked first and then the
+    /// modules that depend on them are checked and so on.
+    pub fn check(&self, db: &mut Db) {
+        // Files should be sorted in topological order.
+        for file in self.files.values() {
+            run_resolution_passes(&file.ast, db);
+            let mut gen_module_type = GenModuleType::new(file.path.clone(), db);
+            gen_module_type.visit_root(&file.ast);
+        }
     }
-}
-
-/// Stores additional information extracted from the AST in various compilation passes.
-pub struct CheckResult {}
-
-/// Get the name of the modules that are declared within this [`Root`].
-fn get_mod_names(ast: &Root) -> Vec<Ident> {
-    ast.mod_items.iter().map(|m| &*m.ident).cloned().collect()
 }
 
 /// Recursively parse all files that can be reached from `entry` (including `entry` itself).
-pub fn parse_files_recursive(
-    entry: &Path,
-    diagnostics: Diagnostics,
-) -> Result<ParseResult, CompileError> {
-    let mut mod_paths = BTreeSet::<ModPath>::new();
-    let mut mod_path_map = BTreeMap::new();
-    let mut files = BTreeMap::new();
-    let mut file_id_map = FileIdMap::new();
-    let mut entry_file_id = None;
+///
+/// Uses Depth-First-Search to sort the modules in topological order.
+pub fn collect_module_graph(entry: &Path, db: &mut Db) -> Result<ModuleGraph, CompileError> {
+    fn get_imports(
+        parent_dir: &Path,
+        root: &Root,
+        db: &mut Db,
+    ) -> Result<Vec<PathBuf>, std::io::Error> {
+        let mut collect_modules = CollectModules::new(parent_dir.to_owned(), db);
+        collect_modules.visit_root(&root);
+        Ok(collect_modules
+            .modules
+            .into_iter()
+            .map(|path| path.unspan().resolve(parent_dir))
+            .collect::<Result<Vec<_>, _>>()?)
+    }
 
-    // A queue of files that are to be parsed. We start with the entry file.
-    let mut queue = vec![(ModPath(Vec::new()), entry.to_path_buf())];
+    enum Mark {
+        Temporary,
+        Permanent,
+    }
 
-    while let Some((mod_path, fs_path)) = queue.pop() {
-        // Check if we've already parsed this file.
-        if mod_paths.contains(&mod_path) {
+    fn visit(
+        graph: &mut ModuleGraph,
+        marks: &mut HashMap<PathBuf, Mark>,
+        path: PathBuf,
+        db: &mut Db,
+    ) -> Result<(), CompileError> {
+        if let Some(Mark::Permanent) = marks.get(&path) {
+            return Ok(());
+        }
+        if let Some(Mark::Temporary) = marks.get(&path) {
             return Err(CompileError::CircularModDeclarations);
         }
+        marks.insert(path.clone(), Mark::Temporary);
 
-        let file_id = file_id_map.insert_new_file(fs_path.clone());
-        // Check if `entry_file_id` has been set. If not, this is the entry file so we will set it
-        // now.
-        if entry_file_id == None {
-            entry_file_id = Some(file_id);
+        // Parse the file.
+        let file_id = graph.file_id_map.insert_new_file(path.clone());
+        let parsed_file = parse_file(&path, file_id, db.diagnostics.clone())?;
+
+        // Recursively visit all the modules that this module imports.
+        let parent_dir = path.parent().expect("file has no parent dir");
+        for import in get_imports(&parent_dir, &parsed_file.ast, db)? {
+            visit(graph, marks, import, db)?;
         }
 
-        let parsed_file = parse_file(&fs_path, file_id, diagnostics.clone())?;
+        graph.files.insert(file_id, parsed_file);
+        marks.insert(path, Mark::Permanent);
 
-        let file_dir = parsed_file
-            .path
-            .parent()
-            .expect("file should have parent directory");
-        let is_main = &parsed_file.name == "main"; // FIXME: allow nested main mod.
-
-        // Get all the mod statements and parse the files they reference.
-        let child_mod_names = get_mod_names(&parsed_file.ast);
-        for child_mod_name in child_mod_names {
-            let child_fs_name = format!("{child_mod_name}.nopo");
-            let child_fs_path: PathBuf = if is_main {
-                [file_dir, Path::new(&child_fs_name)].into_iter().collect()
-            } else {
-                [
-                    file_dir,
-                    Path::new(&parsed_file.name),
-                    Path::new(&child_fs_name),
-                ]
-                .into_iter()
-                .collect()
-            };
-            let child_mod_path = ModPath(
-                mod_path
-                    .clone()
-                    .0
-                    .into_iter()
-                    .chain(Some(child_mod_name.to_string()))
-                    .collect(),
-            );
-            queue.push((child_mod_path, child_fs_path));
-        }
-
-        files.insert(file_id, parsed_file);
-        mod_path_map.insert(mod_path.clone(), file_id);
-        mod_paths.insert(mod_path);
+        Ok(())
     }
-    Ok(ParseResult {
-        files,
-        mod_path_map,
-        file_id_map,
-        entry_file_id: entry_file_id.expect("should have an entry file"),
-    })
+
+    let entry = entry.canonicalize()?;
+    let mut graph = ModuleGraph {
+        files: IndexMap::new(),
+        file_id_map: FileIdMap::new(),
+    };
+    let mut marks: HashMap<PathBuf, Mark> = HashMap::new();
+    visit(&mut graph, &mut marks, entry, db)?;
+
+    Ok(graph)
 }
 
-pub fn run_resolution_passes(root: &Root, diagnostics: Diagnostics) -> Db {
-    let mut db = Db::new(diagnostics.clone());
-
-    let mut resolve = ResolveSymbols::new(&mut db);
+/// Run the resolution passes on the root of the AST. Stores the results in `db`.
+///
+/// Not guaranteed to have complete information if there are errors.
+///
+/// Should only be run if there are no errors in `db`.
+pub fn run_resolution_passes(root: &Root, db: &mut Db) {
+    assert!(db.diagnostics.is_empty());
+    let mut resolve = ResolveSymbols::new(db);
     resolve.visit_root(root);
-    if !diagnostics.is_empty() {
-        return db;
+    if !db.diagnostics.is_empty() {
+        return;
     }
-    let mut unify = UnifyTypes::new(&mut db);
+    let mut unify = UnifyTypes::new(db);
     unify.visit_root(root);
-    db
+    if !db.diagnostics.is_empty() {
+        return;
+    }
 }

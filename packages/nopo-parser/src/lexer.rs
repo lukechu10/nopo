@@ -117,10 +117,6 @@ pub enum Token {
     KwBreak,
     #[token("continue")]
     KwContinue,
-    #[token("use")]
-    KwUse,
-    #[token("mod")]
-    KwMod,
     #[token("pub")]
     KwPub,
 
@@ -209,8 +205,6 @@ impl fmt::Display for Token {
             Token::KwReturn => "`return`",
             Token::KwBreak => "`break`",
             Token::KwContinue => "`continue`",
-            Token::KwUse => "`use`",
-            Token::KwMod => "`mod`",
             Token::KwPub => "`pub`",
             Token::Ident(_) => "an identifier",
             Token::LitTrue => "`true`",

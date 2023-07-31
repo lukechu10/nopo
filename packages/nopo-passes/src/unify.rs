@@ -413,7 +413,17 @@ impl<'a> Visitor for UnifyTypes<'a> {
             Expr::Let(_) => unreachable!(),
             Expr::Lambda(_) => unreachable!(),
             Expr::Match(_) => unreachable!(),
-            Expr::Macro(_) => unreachable!(),
+            Expr::Macro(macro_expr) => {
+                // Handle built-in macros.
+                match macro_expr.ident.to_string().as_str() {
+                    "import" => {
+                        // Expression should be the type of the imported module.
+                        let module_path = &self.db.module_imports_map[&macro_expr];
+                        ResolvedType::Module(module_path.to_owned())
+                    }
+                    _ => todo!("expand macros"),
+                }
+            }
             Expr::Err => unreachable!(),
         };
         self.state.expr_types_map.insert(expr, c_ty);

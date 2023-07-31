@@ -139,7 +139,7 @@ impl<'a> Codegen<'a> {
 
 impl<'a> Visitor for Codegen<'a> {
     fn visit_root(&mut self, root: &Root) {
-        self.new_chunk("<global>".to_string(), 0);
+        self.new_chunk("<import>".to_string(), 0);
         walk_root(self, root);
     }
 

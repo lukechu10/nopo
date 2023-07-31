@@ -5,6 +5,7 @@ use std::error::Error;
 use nopo_diagnostics::span::FileIdMap;
 use nopo_diagnostics::Diagnostics;
 use nopo_parser::parser::Parser;
+use nopo_passes::db::Db;
 use nopo_passes::run_resolution_passes;
 use nopo_vm::compile_and_run;
 use reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal};
@@ -47,7 +48,8 @@ pub fn start_repl() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let db = run_resolution_passes(&root, diagnostics.clone());
+        let mut db = Db::new(diagnostics.clone());
+        run_resolution_passes(&root, &mut db);
         if !diagnostics.eprint(&map) {
             continue;
         }

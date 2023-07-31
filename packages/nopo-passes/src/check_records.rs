@@ -118,6 +118,19 @@ impl<'a> TypeCheckRecords<'a> {
                 }
                 TypeKind::Tmp => unreachable!(),
             }
+        } else if let ResolvedType::Module(path) = ty {
+            let module_ty = &self.db.module_types_map[path];
+            match module_ty.fields.get(field.ident.as_ref()) {
+                Some((ty, i)) => (ty.clone(), *i),
+                None => {
+                    self.db.diagnostics.add(UnknownField {
+                        span: field.span(),
+                        field: field.ident.clone(),
+                        ty: ty.pretty(&self.db.types_map.items),
+                    });
+                    (ResolvedType::Err, 0)
+                }
+            }
         } else {
             self.db.diagnostics.add(NotRecordType {
                 span: expr.span(),
