@@ -2,6 +2,7 @@ use clap::Parser;
 use nopo_diagnostics::Diagnostics;
 use nopo_passes::collect_module_graph;
 use nopo_passes::db::Db;
+use nopo_vm::compile_and_run;
 use std::error::Error;
 use std::path::PathBuf;
 
@@ -36,7 +37,8 @@ fn entry() -> Result<(), Box<dyn Error>> {
         if !diagnostics.eprint(&graph.file_id_map) {
             return Ok(());
         }
-        // compile_and_run(graph.get_entry_root(), &db);
+        let entry_root = &graph.files.last().unwrap().1.ast;
+        compile_and_run(entry_root, &db);
         Ok(())
     } else {
         repl::start_repl()

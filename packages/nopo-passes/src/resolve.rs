@@ -157,7 +157,10 @@ impl<'a> ResolveSymbols<'a> {
                 (None, _found) => {
                     self.db.diagnostics.add(NotAKind {
                         span: ty.span(),
-                        ty: spanned(ty.span(), constructor.pretty(&self.db.types_map.items)),
+                        ty: spanned(
+                            ty.span(),
+                            constructor.pretty(&self.db.types_map.items_by_id),
+                        ),
                     });
                     ResolvedType::Err
                 }
@@ -271,7 +274,7 @@ impl<'a> ResolveSymbols<'a> {
 
     fn data_def_of_constructed(&self, ty: &ResolvedType) -> Option<&DataDef> {
         ty.ident_of_constructed()
-            .map(|id| &self.db.types_map.items[id])
+            .map(|id| &self.db.types_map.items_by_id[id])
     }
 
     /// Create a new scope for a binding and return the created binding id.
@@ -342,7 +345,7 @@ impl<'a> Visitor for ResolveSymbols<'a> {
         self.current_item_id = Some(ItemId::Type(idx));
         // Create type for type item itself.
         let symbol = TypeSymbol::Path(item.ident.as_ref().clone());
-        let resolved = ResolvedType::Ident(idx);
+        let resolved = ResolvedType::Data(idx);
         self.types_stack.push((symbol, resolved));
 
         // Create bindings for all ADT data constructors.
@@ -378,7 +381,7 @@ impl<'a> Visitor for ResolveSymbols<'a> {
             ty_params: item.ty_params.clone(),
             span: item.span(),
         };
-        self.db.types_map.items.insert(idx, data_def);
+        self.db.types_map.items_by_id.insert(idx, data_def);
 
         walk_type_item(self, item);
 
@@ -413,7 +416,7 @@ impl<'a> Visitor for ResolveSymbols<'a> {
             }),
             TypeDef::Err => unreachable!(),
         };
-        self.db.types_map.items[idx].kind = kind;
+        self.db.types_map.items_by_id[idx].kind = kind;
 
         self.restore_stack_state(state);
         self.current_item_id = None;

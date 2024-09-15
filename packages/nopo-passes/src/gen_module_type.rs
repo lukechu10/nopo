@@ -45,7 +45,7 @@ impl<'a> Visitor for GenModuleType<'a> {
 
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
         if *item.vis == Vis::Pub {
-            self.add_symbol(item.ident.as_ref().clone(), ResolvedType::Ident(idx));
+            self.add_symbol(item.ident.as_ref().clone(), ResolvedType::Data(idx));
 
             if let TypeDef::Adt(record_def) = &*item.def {
                 for data_constructor in &record_def.data_constructors {

@@ -95,7 +95,7 @@ impl<'a> TypeCheckRecords<'a> {
             });
             (ResolvedType::Err, 0)
         } else if let Some(id) = ty.ident_of_constructed() {
-            let data_def = &self.db.types_map.items[id];
+            let data_def = &self.db.types_map.items_by_id[id];
             match &data_def.kind {
                 TypeKind::Record(record_def) => match record_def.fields.get(field.ident.as_ref()) {
                     Some((ty, i)) => (ty.clone(), *i),
@@ -103,7 +103,7 @@ impl<'a> TypeCheckRecords<'a> {
                         self.db.diagnostics.add(UnknownField {
                             span: field.span(),
                             field: field.ident.clone(),
-                            ty: ty.pretty(&self.db.types_map.items),
+                            ty: ty.pretty(&self.db.types_map.items_by_id),
                         });
                         (ResolvedType::Err, 0)
                     }
@@ -112,7 +112,7 @@ impl<'a> TypeCheckRecords<'a> {
                     self.db.diagnostics.add(NotRecordType {
                         span: expr.span(),
                         expr: expr.span(),
-                        ty: ty.pretty(&self.db.types_map.items),
+                        ty: ty.pretty(&self.db.types_map.items_by_id),
                     });
                     (ResolvedType::Err, 0)
                 }
@@ -126,7 +126,7 @@ impl<'a> TypeCheckRecords<'a> {
                     self.db.diagnostics.add(UnknownField {
                         span: field.span(),
                         field: field.ident.clone(),
-                        ty: ty.pretty(&self.db.types_map.items),
+                        ty: ty.pretty(&self.db.types_map.items_by_id),
                     });
                     (ResolvedType::Err, 0)
                 }
@@ -135,7 +135,7 @@ impl<'a> TypeCheckRecords<'a> {
             self.db.diagnostics.add(NotRecordType {
                 span: expr.span(),
                 expr: expr.span(),
-                ty: ty.pretty(&self.db.types_map.items),
+                ty: ty.pretty(&self.db.types_map.items_by_id),
             });
             (ResolvedType::Err, 0)
         }
@@ -163,7 +163,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                         expr: expr.span(),
                     });
                 } else if let Some(id) = ty.ident_of_constructed() {
-                    let data_def = &self.db.types_map.items[id];
+                    let data_def = &self.db.types_map.items_by_id[id];
                     match &data_def.kind {
                         TypeKind::Record(record_def) => {
                             // Check every field in the record_expr.
@@ -172,7 +172,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                                     self.db.diagnostics.add(UnknownField {
                                         span: field.span(),
                                         field: field.ident.clone(),
-                                        ty: ty.pretty(&self.db.types_map.items),
+                                        ty: ty.pretty(&self.db.types_map.items_by_id),
                                     });
                                 }
                             }
@@ -202,7 +202,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                             self.db.diagnostics.add(NotRecordType {
                                 span: expr.span(),
                                 expr: expr.span(),
-                                ty: ty.pretty(&self.db.types_map.items),
+                                ty: ty.pretty(&self.db.types_map.items_by_id),
                             });
                         }
                         TypeKind::Tmp => unreachable!(),
@@ -211,7 +211,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                     self.db.diagnostics.add(NotRecordType {
                         span: expr.span(),
                         expr: expr.span(),
-                        ty: ty.pretty(&self.db.types_map.items),
+                        ty: ty.pretty(&self.db.types_map.items_by_id),
                     });
                 }
             }

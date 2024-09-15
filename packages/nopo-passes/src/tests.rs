@@ -42,7 +42,10 @@ pub fn check_types(input: &str, expect: Expect) {
     for (id, ty) in binding_types {
         let binding = &db.bindings[id];
         let ident = &binding.ident;
-        actual.push_str(&format!("{ident}: {}\n", ty.pretty(&db.types_map.items)));
+        actual.push_str(&format!(
+            "{ident}: {}\n",
+            ty.pretty(&db.types_map.items_by_id)
+        ));
     }
 
     expect.assert_eq(&actual.trim());

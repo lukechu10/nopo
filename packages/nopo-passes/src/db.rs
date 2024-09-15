@@ -10,7 +10,7 @@ use nopo_diagnostics::span::{Span, Spanned};
 use nopo_diagnostics::Diagnostics;
 use nopo_parser::ast::{
     DataConstructor, Expr, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, MacroExpr, Param,
-    Pattern, RecordFieldExpr, Type, TypeId, TypeParam,
+    Pattern, RecordFieldExpr, Type, TypeId, TypeItem, TypeParam,
 };
 use smol_str::SmolStr;
 
@@ -19,6 +19,7 @@ use crate::map::NodeMap;
 #[derive(Debug)]
 pub struct Db {
     pub bindings: Arena<Binding>,
+    pub data_defs: Arena<DataDef>,
 
     // `CollectModules`
     /// Mapping from import expressions to the canonical path of the module.
@@ -50,8 +51,9 @@ pub struct Db {
 impl Db {
     pub fn new(diagnostics: Diagnostics) -> Self {
         Self {
-            module_imports_map: NodeMap::default(),
+            data_defs: Arena::default(),
             bindings: Arena::default(),
+            module_imports_map: NodeMap::default(),
             bindings_map: BindingsMap::default(),
             types_map: TypesMap::default(),
             binding_types_map: HashMap::default(),
@@ -120,7 +122,10 @@ pub enum TypeSymbol {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedType {
-    Ident(TypeId),
+    /// Type of a data-definition. This can be either an ADT or a record.
+    /// Holds the definition site of the data type.
+    Data(TypeId),
+    /// Type of a tuple.
     Tuple(Vec<Self>),
     /// Modules have special types because they are only inhabited by the value of the module
     /// itself. It is also impossible to explicitly refer to a module type.
@@ -221,12 +226,12 @@ impl ResolvedType {
             .iter()
             .map(|param| Self::Var(param.ident.as_ref().clone().into()))
             .collect::<Vec<_>>();
-        Self::new_curried_constructed_ty(Self::Ident(id), &ty_params)
+        Self::new_curried_constructed_ty(Self::Data(id), &ty_params)
     }
 
     pub fn ident_of_constructed(&self) -> Option<TypeId> {
         match self {
-            Self::Ident(id) => Some(*id),
+            Self::Data(id) => Some(*id),
             Self::Constructed {
                 constructor,
                 arg: _,
@@ -256,7 +261,7 @@ pub struct ResolvedTypePretty<'a>(&'a ResolvedType, &'a ArenaMap<TypeId, DataDef
 impl<'a> fmt::Display for ResolvedTypePretty<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
-            ResolvedType::Ident(id) => write!(f, "{}", self.1[*id].ident)?,
+            ResolvedType::Data(id) => write!(f, "{}", self.1[*id].ident)?,
             ResolvedType::Tuple(types) => {
                 write!(f, "(")?;
                 if let Some(first) = types.first() {
@@ -341,7 +346,9 @@ pub struct AdtVariant {
 
 #[derive(Debug, Default)]
 pub struct TypesMap {
-    pub items: ArenaMap<TypeId, DataDef>,
+    // #[deprecated]
+    pub items_by_id: ArenaMap<TypeId, DataDef>,
+    pub items: NodeMap<TypeItem, DataDef>,
     pub types: NodeMap<Type, ResolvedType>,
 }
 

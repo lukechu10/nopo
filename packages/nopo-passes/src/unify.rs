@@ -124,7 +124,7 @@ impl<'a> Visitor for UnifyTypes<'a> {
             // Generalize the type of this binding.
             let binding_ty = binding_ty.generalize();
 
-            let pretty = binding_ty.pretty(&self.db.types_map.items);
+            let pretty = binding_ty.pretty(&self.db.types_map.items_by_id);
             eprintln!(" {}: {pretty}", item.ident);
             self.db.binding_types_map.insert(binding_id, binding_ty);
         }
@@ -133,11 +133,11 @@ impl<'a> Visitor for UnifyTypes<'a> {
     fn visit_type_item(&mut self, idx: TypeId, item: &Spanned<TypeItem>) {
         match &*item.def {
             TypeDef::Adt(adt) => {
-                let type_data = match &self.db.types_map.items[idx].kind {
+                let type_data = match &self.db.types_map.items_by_id[idx].kind {
                     TypeKind::Adt(adt) => adt,
                     _ => unreachable!(),
                 };
-                let c_ty = ResolvedType::of_type_item(idx, &self.db.types_map.items);
+                let c_ty = ResolvedType::of_type_item(idx, &self.db.types_map.items_by_id);
                 for (data_constructor, variant) in
                     adt.data_constructors.iter().zip(&type_data.variants)
                 {
@@ -146,7 +146,7 @@ impl<'a> Visitor for UnifyTypes<'a> {
                     let c_data_constructor_ty =
                         ResolvedType::new_curried_function(&variant.types, c_ty.clone())
                             .generalize();
-                    let pretty = c_data_constructor_ty.pretty(&self.db.types_map.items);
+                    let pretty = c_data_constructor_ty.pretty(&self.db.types_map.items_by_id);
                     eprintln!(" {}: {pretty}", data_constructor.ident);
                     self.db
                         .binding_types_map
@@ -517,8 +517,8 @@ impl GenerateConstraints {
                     SubSearch::Contradiction => {
                         diagnostics.add(CouldNotUnifyTypes {
                             span: c.0.span(),
-                            first: spanned(c.0.span(), c.0.pretty(&types_map.items)),
-                            second: spanned(c.1.span(), c.1.pretty(&types_map.items)),
+                            first: spanned(c.0.span(), c.0.pretty(&types_map.items_by_id)),
+                            second: spanned(c.1.span(), c.1.pretty(&types_map.items_by_id)),
                         });
                         None
                     }
@@ -526,8 +526,8 @@ impl GenerateConstraints {
                     SubSearch::InfiniteType => {
                         diagnostics.add(CannotCreateInfiniteType {
                             span: c.0.span(),
-                            first: spanned(c.0.span(), c.0.pretty(&types_map.items)),
-                            second: spanned(c.1.span(), c.1.pretty(&types_map.items)),
+                            first: spanned(c.0.span(), c.0.pretty(&types_map.items_by_id)),
+                            second: spanned(c.1.span(), c.1.pretty(&types_map.items_by_id)),
                         });
                         None
                     }
