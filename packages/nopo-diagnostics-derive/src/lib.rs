@@ -92,7 +92,7 @@ fn impl_into_report(input: DeriveInput) -> Result<TokenStream> {
     let labels = fields
         .iter()
         .zip(labels.iter())
-        .filter_map(|(field, label)| label.as_ref().and_then(|label| Some((field, label))))
+        .filter_map(|(field, label)| label.as_ref().map(|label| (field, label)))
         .map(|(field, label)| {
             let ident = field.ident.as_ref().expect("not tuple struct");
             let message = &label.message.value;

@@ -72,7 +72,7 @@ impl<'a> TypeCheckRecords<'a> {
     }
 }
 
-impl<'a> TypeCheckRecords<'a> {
+impl TypeCheckRecords<'_> {
     fn resolve_field_ty(&mut self, expr: &Spanned<Expr>, field: &Spanned<Expr>) -> ResolvedType {
         // Check that field is an identifier.
         let Expr::Ident(field) = &**field else {
@@ -82,7 +82,7 @@ impl<'a> TypeCheckRecords<'a> {
             });
             return ResolvedType::Err;
         };
-        let ty = &mut self.state.expr_types_map[&*expr];
+        let ty = &mut self.state.expr_types_map[expr];
 
         if let ResolvedType::Var(_) | ResolvedType::Param(_) = ty {
             self.db.diagnostics.add(TypeMustBeKnown {
@@ -125,12 +125,12 @@ impl<'a> TypeCheckRecords<'a> {
     }
 }
 
-impl<'a> Visitor for TypeCheckRecords<'a> {
+impl Visitor for TypeCheckRecords<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         walk_expr(self, expr);
         match &**expr {
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => {
-                let c_ty = self.state.expr_types_map[&*expr].clone();
+                let c_ty = self.state.expr_types_map[expr].clone();
                 // assert!(
                 //     matches!(c_ty, ResolvedType::Var(_)),
                 //     "record type should not be inferred yet"
@@ -142,7 +142,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                 ));
             }
             Expr::Record(record_expr) => {
-                let ty = &self.state.expr_types_map[&*expr];
+                let ty = &self.state.expr_types_map[expr];
                 if let ResolvedType::Var(_) | ResolvedType::Param(_) = ty {
                     self.db.diagnostics.add(TypeMustBeKnown {
                         span: expr.span(),
@@ -154,7 +154,7 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                         TypeKind::Record(record_def) => {
                             // Check every field in the record_expr.
                             for field in &record_expr.fields {
-                                if record_def.fields.get(&field.ident).is_none() {
+                                if !record_def.fields.contains_key(&field.ident) {
                                     self.db.diagnostics.add(UnknownField {
                                         span: field.span(),
                                         field: field.ident.clone(),
@@ -165,7 +165,11 @@ impl<'a> Visitor for TypeCheckRecords<'a> {
                             // Check if any field is missing and add constraints on field types.
                             let mut missing = Vec::new();
                             for (ident, field_ty) in &record_def.fields {
-                                let Some(field) = record_expr.fields.iter().find(|field| &*field.ident == ident) else {
+                                let Some(field) = record_expr
+                                    .fields
+                                    .iter()
+                                    .find(|field| &*field.ident == ident)
+                                else {
                                     missing.push(format!("`{ident}`"));
                                     continue;
                                 };

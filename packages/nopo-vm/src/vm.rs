@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::rc::Rc;
 
 use crate::print::print_chunk;
@@ -73,114 +74,122 @@ impl Vm {
         let callee = &self.stack[self.stack.len() - args as usize - 1];
         let closure = callee.as_object().unwrap().as_closure().unwrap();
         let callee_arity = closure.proto.arity;
-        if callee_arity > args {
-            // Generate a lambda on the fly. Capture all arguments as upvalues. Capture the
-            // original closure as the lambda_arity-th upvalue.
-            let lambda_arity = callee_arity - args;
-            let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
-            let mut upvalues = (0..args)
-                .map(|_| self.pop())
-                .map(UpValue)
-                .collect::<Vec<_>>();
-            upvalues.push(UpValue(self.pop())); // This should be the closure.
-            chunk.write(Instr::LoadUpValue(lambda_arity));
-            for i in 0..args {
-                chunk.write(Instr::LoadUpValue(i));
-            }
-            for i in 0..lambda_arity {
-                chunk.write(Instr::LoadLocal(i));
-            }
-            chunk.write(Instr::Calli { args: callee_arity });
-            let chunk = chunk.into_chunk();
-            print_chunk(&chunk, &mut std::io::stderr()).unwrap();
-            let closure = ObjClosure {
-                proto: ObjProto {
-                    chunk: Rc::new(chunk),
-                    arity: lambda_arity,
-                    upvalues_count: args,
-                },
-                upvalues,
-            };
-            self.stack
-                .push(Value::Object(Rc::new(Object::Closure(Rc::new(closure)))));
-        } else if callee_arity == args {
-            self.call_stack.push(CallFrame {
-                ip: 0,
-                frame_pointer: self.stack.len() - callee_arity as usize,
-                is_call_global: true,
-                closure,
-            });
-        } else {
-            // Call first with callee_args number of args. Then call that expression
-            // again with remaining args.
-            let extra_arity = args - callee_arity;
-            let extra = (0..extra_arity).map(|_| self.pop()).collect::<Vec<_>>();
-            // Get the new closure on the top of the stack.
-            // We need to run this new frame to completion to get the value of the closre.
-            self.calli(callee_arity);
-            self.run_frame();
+        match callee_arity.cmp(&args) {
+            Ordering::Less => {
+                // Call first with callee_args number of args. Then call that expression
+                // again with remaining args.
+                let extra_arity = args - callee_arity;
+                let extra = (0..extra_arity).map(|_| self.pop()).collect::<Vec<_>>();
+                // Get the new closure on the top of the stack.
+                // We need to run this new frame to completion to get the value of the closre.
+                self.calli(callee_arity);
+                self.run_frame();
 
-            for value in extra {
-                self.stack.push(value);
+                for value in extra {
+                    self.stack.push(value);
+                }
+                self.calli(extra_arity);
             }
-            self.calli(extra_arity);
+            Ordering::Equal => {
+                self.call_stack.push(CallFrame {
+                    ip: 0,
+                    frame_pointer: self.stack.len() - callee_arity as usize,
+                    is_call_global: true,
+                    closure,
+                });
+            }
+            Ordering::Greater => {
+                // Generate a lambda on the fly. Capture all arguments as upvalues. Capture the
+                // original closure as the lambda_arity-th upvalue.
+                let lambda_arity = callee_arity - args;
+                let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
+                let mut upvalues = (0..args)
+                    .map(|_| self.pop())
+                    .map(UpValue)
+                    .collect::<Vec<_>>();
+                upvalues.push(UpValue(self.pop())); // This should be the closure.
+                chunk.write(Instr::LoadUpValue(lambda_arity));
+                for i in 0..args {
+                    chunk.write(Instr::LoadUpValue(i));
+                }
+                for i in 0..lambda_arity {
+                    chunk.write(Instr::LoadLocal(i));
+                }
+                chunk.write(Instr::Calli { args: callee_arity });
+                let chunk = chunk.into_chunk();
+                print_chunk(&chunk, &mut std::io::stderr()).unwrap();
+                let closure = ObjClosure {
+                    proto: ObjProto {
+                        chunk: Rc::new(chunk),
+                        arity: lambda_arity,
+                        upvalues_count: args,
+                    },
+                    upvalues,
+                };
+                self.stack
+                    .push(Value::Object(Rc::new(Object::Closure(Rc::new(closure)))));
+            }
         }
     }
     fn call_global(&mut self, idx: u32, args: u32) {
         let callee = &self.stack[idx as usize];
         let closure = callee.as_object().unwrap().as_closure().unwrap();
         let callee_arity = closure.proto.arity;
-        if callee_arity > args {
-            // Generate a lambda on the fly. Capture all arguments as upvalues.
-            let lambda_arity = callee_arity - args;
-            let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
-            let upvalues = (0..args)
-                .map(|_| self.pop())
-                .map(UpValue)
-                .collect::<Vec<_>>();
-            for i in 0..args {
-                chunk.write(Instr::LoadUpValue(i));
-            }
-            for i in 0..lambda_arity {
-                chunk.write(Instr::LoadLocal(i));
-            }
-            chunk.write(Instr::CallGlobal {
-                idx,
-                args: callee_arity,
-            });
-            let chunk = chunk.into_chunk();
-            print_chunk(&chunk, &mut std::io::stderr()).unwrap();
-            let closure = ObjClosure {
-                proto: ObjProto {
-                    chunk: Rc::new(chunk),
-                    arity: lambda_arity,
-                    upvalues_count: args,
-                },
-                upvalues,
-            };
-            self.stack
-                .push(Value::Object(Rc::new(Object::Closure(Rc::new(closure)))));
-        } else if callee_arity == args {
-            self.call_stack.push(CallFrame {
-                ip: 0,
-                frame_pointer: self.stack.len() - callee_arity as usize,
-                is_call_global: true,
-                closure,
-            });
-        } else {
-            // Call first with callee_args number of args. Then call that expression
-            // again with remaining args.
-            let extra_arity = args - callee_arity;
-            let extra = (0..extra_arity).map(|_| self.pop()).collect::<Vec<_>>();
-            // Get the new closure on the top of the stack.
-            // We need to run this new frame to completion to get the value of the closre.
-            self.call_global(idx, callee_arity);
-            self.run_frame();
+        match callee_arity.cmp(&args) {
+            Ordering::Less => {
+                // Call first with callee_args number of args. Then call that expression
+                // again with remaining args.
+                let extra_arity = args - callee_arity;
+                let extra = (0..extra_arity).map(|_| self.pop()).collect::<Vec<_>>();
+                // Get the new closure on the top of the stack.
+                // We need to run this new frame to completion to get the value of the closre.
+                self.call_global(idx, callee_arity);
+                self.run_frame();
 
-            for value in extra {
-                self.stack.push(value);
+                for value in extra {
+                    self.stack.push(value);
+                }
+                self.calli(extra_arity);
             }
-            self.calli(extra_arity);
+            Ordering::Equal => {
+                self.call_stack.push(CallFrame {
+                    ip: 0,
+                    frame_pointer: self.stack.len() - callee_arity as usize,
+                    is_call_global: true,
+                    closure,
+                });
+            }
+            Ordering::Greater => {
+                // Generate a lambda on the fly. Capture all arguments as upvalues.
+                let lambda_arity = callee_arity - args;
+                let mut chunk = ChunkBuilder::new("<partial>".to_string(), lambda_arity);
+                let upvalues = (0..args)
+                    .map(|_| self.pop())
+                    .map(UpValue)
+                    .collect::<Vec<_>>();
+                for i in 0..args {
+                    chunk.write(Instr::LoadUpValue(i));
+                }
+                for i in 0..lambda_arity {
+                    chunk.write(Instr::LoadLocal(i));
+                }
+                chunk.write(Instr::CallGlobal {
+                    idx,
+                    args: callee_arity,
+                });
+                let chunk = chunk.into_chunk();
+                print_chunk(&chunk, &mut std::io::stderr()).unwrap();
+                let closure = ObjClosure {
+                    proto: ObjProto {
+                        chunk: Rc::new(chunk),
+                        arity: lambda_arity,
+                        upvalues_count: args,
+                    },
+                    upvalues,
+                };
+                self.stack
+                    .push(Value::Object(Rc::new(Object::Closure(Rc::new(closure)))));
+            }
         }
     }
 

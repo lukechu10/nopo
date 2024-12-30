@@ -48,7 +48,7 @@ pub struct ParsedFile {
 /// # Params
 /// * `path` - The path of the file to be parsed.
 /// * `file_id` - The [`FileId`] of the file. This information is inlcuded in the spans produced by
-/// the parser.
+///   the parser.
 fn parse_file(
     path: &Path,
     file_id: FileId,
@@ -152,7 +152,7 @@ pub fn parse_files_recursive(
         let file_id = file_id_map.insert_new_file(fs_path.clone());
         // Check if `entry_file_id` has been set. If not, this is the entry file so we will set it
         // now.
-        if entry_file_id == None {
+        if entry_file_id.is_none() {
             entry_file_id = Some(file_id);
         }
 

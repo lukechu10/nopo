@@ -83,7 +83,7 @@ impl<'a> UnifyTypes<'a> {
     }
 }
 
-impl<'a> Visitor for UnifyTypes<'a> {
+impl Visitor for UnifyTypes<'_> {
     fn visit_root(&mut self, root: &Root) {
         // Visit type items first since we know the types of all the data constructors.
         for (idx, item) in root.type_items.iter() {
@@ -97,7 +97,7 @@ impl<'a> Visitor for UnifyTypes<'a> {
 
             let solutions = state.solve(&self.db.diagnostics, &self.db.types_map);
 
-            let binding_id = self.db.bindings_map.let_items[&*item];
+            let binding_id = self.db.bindings_map.let_items[item];
             let mut binding_ty = self.db.binding_types_map[&binding_id].clone();
 
             // Substitute in solutions.
@@ -174,7 +174,7 @@ impl<'a> Visitor for UnifyTypes<'a> {
             .map(|param| {
                 param.ty.as_ref().map_or_else(
                     || self.state.new_type_var(),
-                    |ty| self.db.types_map.types[&*ty].clone(),
+                    |ty| self.db.types_map.types[ty].clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -531,12 +531,12 @@ impl GenerateConstraints {
                 // Substitute in constraints.
                 apply_subs(&mut constraints, &var, c_ty.clone());
                 // Substitute in existing solutions.
-                for (_, solution) in &mut solutions {
+                for solution in solutions.values_mut() {
                     solution.apply_sub(&var, c_ty.clone());
                 }
                 // Substitute in all other substitutions which have not already been substituted.
-                for sub_j in sub_i + 1..subs.len() {
-                    subs[sub_j].1.apply_sub(&var, c_ty.clone());
+                for sub in subs.iter_mut().skip(sub_i + 1) {
+                    sub.1.apply_sub(&var, c_ty.clone());
                 }
                 solutions.insert(var.clone(), c_ty);
             }
@@ -615,7 +615,7 @@ impl Constraint {
                 if lhs.len() != rhs.len() {
                     SubSearch::Contradiction
                 } else {
-                    for (lhs, rhs) in lhs.into_iter().zip(rhs) {
+                    for (lhs, rhs) in lhs.iter().zip(rhs) {
                         let sub = Self::generate_subs(lhs, rhs);
                         if sub.propagate_up() {
                             return sub;
@@ -751,9 +751,7 @@ impl ResolvedType {
                 bound.pop();
             }
             ResolvedType::Var(x) | ResolvedType::Param(x) => {
-                if bound.iter().find(|y| &x == *y).is_none()
-                    && free.iter().find(|y| &x == *y).is_none()
-                {
+                if !bound.iter().any(|y| &x == y) && !free.iter().any(|y| &x == y) {
                     free.push(x);
                 }
             }

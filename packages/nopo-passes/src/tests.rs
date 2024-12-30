@@ -41,7 +41,7 @@ pub fn check_types(input: &str, expect: Expect) {
         actual.push_str(&format!("{ident}: {}\n", ty.pretty(&db.types_map.items)));
     }
 
-    expect.assert_eq(&actual.trim());
+    expect.assert_eq(actual.trim());
 }
 
 pub fn check_fail(input: &str, expect: Expect) {

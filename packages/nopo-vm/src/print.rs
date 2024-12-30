@@ -21,7 +21,7 @@ pub fn print_chunk(chunk: &Chunk, f: &mut dyn io::Write) -> io::Result<()> {
     for (idx, value) in chunk.consts.iter().enumerate() {
         writeln!(f, "{:>4} {value}", Paint::rgb(150, 150, 150, idx))?;
     }
-    writeln!(f, "")?;
+    writeln!(f)?;
     Ok(())
 }
 
@@ -58,11 +58,9 @@ impl fmt::Display for InstrOffset {
             Instr::CallGlobal { idx, args } => {
                 write!(f, "{:<15} idx: {idx}, args: {args}", "call.global")
             }
-            Instr::MakeClosure { idx, upvalues } => write!(
-                f,
-                "{:<15} idx: {idx}, upvalues: {upvalues}",
-                "make.closure"
-            ),
+            Instr::MakeClosure { idx, upvalues } => {
+                write!(f, "{:<15} idx: {idx}, upvalues: {upvalues}", "make.closure")
+            }
             Instr::MakeTuple { args } => write!(f, "{:<15} args: {args}", "make.tuple"),
             Instr::MakeAdt { tag, args } => {
                 write!(f, "{:<15} tag: {tag}, args: {args}", "make.adt")

@@ -46,7 +46,7 @@ impl<'a> FileCache<'a> {
     }
 }
 
-impl<'a> ariadne::Cache<FileId> for FileCache<'a> {
+impl ariadne::Cache<FileId> for FileCache<'_> {
     fn fetch(&mut self, id: &FileId) -> Result<&Source, Box<dyn fmt::Debug + '_>> {
         if !self.sources.contains_key(id) {
             let str = if self.map.is_virtual(*id) {

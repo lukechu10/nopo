@@ -158,8 +158,10 @@ impl<T> Spanned<T> {
     pub fn span(&self) -> Span {
         self.1
     }
+}
 
-    pub fn as_ref(&self) -> &T {
+impl<T> AsRef<T> for Spanned<T> {
+    fn as_ref(&self) -> &T {
         &self.0
     }
 }

@@ -225,7 +225,7 @@ impl ResolvedType {
 
 /// Pretty printer for [`ResolvedType`].
 pub struct ResolvedTypePretty<'a>(&'a ResolvedType, &'a ArenaMap<TypeId, DataDef>);
-impl<'a> fmt::Display for ResolvedTypePretty<'a> {
+impl fmt::Display for ResolvedTypePretty<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
             ResolvedType::Ident(id) => write!(f, "{}", self.1[*id].ident)?,

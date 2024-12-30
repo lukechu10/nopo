@@ -284,7 +284,7 @@ impl<'a> ResolveSymbols<'a> {
 
     fn try_resolve_binding(&self, ident: &Spanned<Ident>) -> Option<BindingId> {
         for id in self.bindings_stack.iter().rev() {
-            if &self.db.bindings[*id].ident == &**ident {
+            if self.db.bindings[*id].ident == **ident {
                 return Some(*id);
             }
         }
@@ -314,7 +314,7 @@ impl<'a> ResolveSymbols<'a> {
     }
 }
 
-impl<'a> Visitor for ResolveSymbols<'a> {
+impl Visitor for ResolveSymbols<'_> {
     fn visit_let_item(&mut self, idx: LetId, item: &Spanned<LetItem>) {
         self.current_item_id = Some(ItemId::Let(idx));
         // If no params, then this is a value instead of a function. Don't allow recursive values.
@@ -486,7 +486,7 @@ impl<'a> Visitor for ResolveSymbols<'a> {
             }
             Expr::Ident(Spanned(ident_expr @ IdentExpr { ident }, _)) => {
                 // Lookup the binding for this ident.
-                let resolved_binding = self.resolve_binding(&ident);
+                let resolved_binding = self.resolve_binding(ident);
                 self.db
                     .bindings_map
                     .idents

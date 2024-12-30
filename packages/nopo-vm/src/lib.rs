@@ -22,5 +22,5 @@ pub fn compile_and_run(root: &Root, db: &Db) {
     for value in &vm.stack {
         eprintln!("{value}");
     }
-    eprintln!("");
+    eprintln!();
 }
