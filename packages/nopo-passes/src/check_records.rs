@@ -72,7 +72,7 @@ impl<'a> TypeCheckRecords<'a> {
     }
 }
 
-impl<'a> TypeCheckRecords<'a> {
+impl TypeCheckRecords<'_> {
     fn resolve_field(
         &mut self,
         expr: &Spanned<Expr>,
@@ -147,7 +147,7 @@ impl Visitor for TypeCheckRecords<'_> {
         walk_expr(self, expr);
         match &**expr {
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => {
-                let c_ty = self.state.expr_types_map[&*expr].clone();
+                let c_ty = self.state.expr_types_map[expr].clone();
                 let (c_expr, i) = self.resolve_field(&bin_expr.lhs, &bin_expr.rhs);
                 self.state.constraints.push(Constraint(
                     spanned(bin_expr.rhs.span(), c_expr),
@@ -179,7 +179,11 @@ impl Visitor for TypeCheckRecords<'_> {
                             // Check if any field is missing and add constraints on field types.
                             let mut missing = Vec::new();
                             for (ident, (field_ty, field_pos)) in &record_def.fields {
-                                let Some(field) = record_expr.fields.iter().find(|field| &*field.ident == ident) else {
+                                let Some(field) = record_expr
+                                    .fields
+                                    .iter()
+                                    .find(|field| &*field.ident == ident)
+                                else {
                                     missing.push(format!("`{ident}`"));
                                     continue;
                                 };

@@ -105,12 +105,12 @@ pub fn collect_module_graph(entry: &Path, db: &mut Db) -> Result<ModuleGraph, Co
         db: &mut Db,
     ) -> Result<Vec<PathBuf>, std::io::Error> {
         let mut collect_modules = CollectModules::new(parent_dir.to_owned(), db);
-        collect_modules.visit_root(&root);
-        Ok(collect_modules
+        collect_modules.visit_root(root);
+        collect_modules
             .modules
             .into_iter()
             .map(|path| path.unspan().resolve(parent_dir))
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()
     }
 
     enum Mark {
@@ -138,7 +138,7 @@ pub fn collect_module_graph(entry: &Path, db: &mut Db) -> Result<ModuleGraph, Co
 
         // Recursively visit all the modules that this module imports.
         let parent_dir = path.parent().expect("file has no parent dir");
-        for import in get_imports(&parent_dir, &parsed_file.ast, db)? {
+        for import in get_imports(parent_dir, &parsed_file.ast, db)? {
             visit(graph, marks, import, db)?;
         }
 
@@ -174,6 +174,10 @@ pub fn run_resolution_passes(root: &Root, db: &mut Db) {
     let mut unify = UnifyTypes::new(db);
     unify.visit_root(root);
     if !db.diagnostics.is_empty() {
+        #[expect(
+            clippy::needless_return,
+            reason = "we do not have other passes implemented yet"
+        )]
         return;
     }
 }

@@ -286,7 +286,8 @@ impl Visitor for Codegen<'_> {
                 });
             }
             Expr::Binary(bin_expr) if *bin_expr.op == BinOp::Dot => {
-                let field_pos = self.db.record_field_map[&*expr];
+                let field_pos = self.db.record_field_map[expr];
+                
                 self.visit_expr(&bin_expr.lhs);
                 self.chunk().write(GetField(field_pos));
             }

@@ -44,7 +44,7 @@ impl ModulePath {
     fn from_expr(expr: &Expr) -> Option<Self> {
         match expr {
             Expr::Lit(Spanned(LitExpr::String(path), _)) => Some(Self::Relative(path.clone())),
-            _ => Self::absolute_from_expr(expr).and_then(|path| Some(Self::Absolute(path))),
+            _ => Self::absolute_from_expr(expr).map(Self::Absolute),
         }
     }
 
@@ -75,7 +75,7 @@ impl ModulePath {
     }
 }
 
-impl<'a> Visitor for CollectModules<'a> {
+impl Visitor for CollectModules<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &**expr {
             Expr::Macro(macro_expr) if &*macro_expr.ident == "import" => {

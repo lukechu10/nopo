@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use crate::types::{ChunkBuilder, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray};
+use crate::{print::print_chunk, types::{ChunkBuilder, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray}};
 
 #[derive(Debug)]
 pub struct CallFrame {

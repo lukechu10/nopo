@@ -34,7 +34,7 @@ impl<'a> GenModuleType<'a> {
     }
 }
 
-impl<'a> Visitor for GenModuleType<'a> {
+impl Visitor for GenModuleType<'_> {
     fn visit_root(&mut self, root: &Root) {
         walk_root(self, root);
 

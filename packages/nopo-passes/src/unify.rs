@@ -418,7 +418,8 @@ impl Visitor for UnifyTypes<'_> {
                 match macro_expr.ident.to_string().as_str() {
                     "import" => {
                         // Expression should be the type of the imported module.
-                        let module_path = &self.db.module_imports_map[&macro_expr];
+                        let module_path = &self.db.module_imports_map[macro_expr];
+                        
                         ResolvedType::Module(module_path.to_owned())
                     }
                     _ => todo!("expand macros"),
