@@ -21,9 +21,6 @@ pub trait Visitor {
         walk_type_item(self, item)
     }
 
-    fn visit_mod_item(&mut self, _item: &Spanned<ModItem>) {}
-    fn visit_use_item(&mut self, _item: &Spanned<UseItem>) {}
-
     fn visit_root(&mut self, root: &Root) {
         walk_root(self, root)
     }
@@ -102,6 +99,8 @@ pub fn walk_expr<T: Visitor + ?Sized>(visitor: &mut T, expr: &Expr) {
             visitor.visit_expr(expr);
             visitor.visit_expr(_in);
         }
+        // We don't walk macros since they are pre-processed first.
+        Expr::Macro(_) => {}
         Expr::Err => {}
     }
 }
@@ -120,13 +119,6 @@ pub fn walk_pattern<T: Visitor + ?Sized>(visitor: &mut T, pattern: &Pattern) {
 }
 
 pub fn walk_root<T: Visitor + ?Sized>(visitor: &mut T, root: &Root) {
-    for mod_item in &root.mod_items {
-        visitor.visit_mod_item(mod_item);
-    }
-    for use_item in &root.use_items {
-        visitor.visit_use_item(use_item);
-    }
-
     for id in &root.items {
         match id {
             ItemId::Let(id) => visitor.visit_let_item(*id, &root.let_items[*id]),

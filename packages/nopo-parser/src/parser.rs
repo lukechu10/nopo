@@ -226,8 +226,6 @@ impl Parser {
         let mut let_items = Arena::new();
         let mut type_items = Arena::new();
         let mut items = Vec::new();
-        let mut mod_items = Vec::new();
-        let mut use_items = Vec::new();
         while !self.eof() {
             let attrs = self.parse_attributes();
             // If we see a visibility keyword, look at the token after that to decide which branch
@@ -247,14 +245,6 @@ impl Parser {
                     let id = type_items.alloc(item);
                     items.push(ItemId::Type(id));
                 }
-                Token::KwMod => {
-                    let item = self.parse_mod_item(attrs);
-                    mod_items.push(item);
-                }
-                Token::KwUse => {
-                    let item = self.parse_use_item(attrs);
-                    use_items.push(item);
-                }
                 _ => {
                     self.diagnostics.add(ExpectedItem {
                         span: self.peek_span(),
@@ -268,8 +258,6 @@ impl Parser {
             let_items,
             type_items,
             items,
-            mod_items,
-            use_items,
         }
     }
 
@@ -682,6 +670,10 @@ impl Parser {
                 let expr = self.parse_if_expr();
                 self.finish(start, Expr::If(expr))
             }
+            Token::At => {
+                let expr = self.parse_macro_expr();
+                self.finish(start, Expr::Macro(expr))
+            }
             Token::KwMatch => {
                 let expr = self.parse_match_expr();
                 self.finish(start, Expr::Match(expr))
@@ -1036,20 +1028,18 @@ impl Parser {
         )
     }
 
-    pub fn parse_mod_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<ModItem> {
+    pub fn parse_macro_expr(&mut self) -> Spanned<MacroExpr> {
         let start = self.start();
-        let vis = self.parse_vis();
-        self.expect(Token::KwMod);
+        self.expect(Token::At);
         let ident = self.parse_ident();
-        self.finish(start, ModItem { attrs, vis, ident })
-    }
-
-    pub fn parse_use_item(&mut self, attrs: Spanned<Attributes>) -> Spanned<UseItem> {
-        let start = self.start();
-        let vis = self.parse_vis();
-        self.expect(Token::KwUse);
-        let path = self.parse_ident();
-        self.finish(start, UseItem { attrs, vis, path })
+        let expr = self.parse_primary_expr();
+        self.finish(
+            start,
+            MacroExpr {
+                ident,
+                expr: Box::new(expr),
+            },
+        )
     }
 
     pub fn peek_is_pattern(&mut self) -> bool {

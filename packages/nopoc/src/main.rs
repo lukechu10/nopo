@@ -1,6 +1,7 @@
 use clap::Parser;
 use nopo_diagnostics::Diagnostics;
-use nopo_passes::{parse_files_recursive, run_resolution_passes};
+use nopo_passes::collect_module_graph;
+use nopo_passes::db::Db;
 use nopo_vm::compile_and_run;
 use std::error::Error;
 use std::path::PathBuf;
@@ -27,15 +28,17 @@ fn entry() -> Result<(), Box<dyn Error>> {
 
     if let Some(input) = args.input {
         let diagnostics = Diagnostics::default();
-        let parse_result = parse_files_recursive(&input, diagnostics.clone())?;
-        if !diagnostics.eprint(&parse_result.file_id_map) {
+        let mut db = Db::new(diagnostics.clone());
+        let graph = collect_module_graph(&input, &mut db)?;
+        if !diagnostics.eprint(&graph.file_id_map) {
             return Ok(());
         }
-        let db = run_resolution_passes(parse_result.get_entry_root(), diagnostics.clone());
-        if !diagnostics.eprint(&parse_result.file_id_map) {
+        graph.check(&mut db);
+        if !diagnostics.eprint(&graph.file_id_map) {
             return Ok(());
         }
-        compile_and_run(parse_result.get_entry_root(), &db);
+        let entry_root = &graph.files.last().unwrap().1.ast;
+        compile_and_run(entry_root, &db);
         Ok(())
     } else {
         repl::start_repl()

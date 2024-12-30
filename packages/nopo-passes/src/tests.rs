@@ -5,6 +5,7 @@ use nopo_diagnostics::span::FileIdMap;
 use nopo_diagnostics::Diagnostics;
 use nopo_parser::parser::Parser;
 
+use crate::db::Db;
 use crate::run_resolution_passes;
 
 pub fn check(input: &str) {
@@ -16,7 +17,8 @@ pub fn check(input: &str) {
     assert!(diagnostics.eprint(&map));
 
     let root = parser.parse_root();
-    let _ = run_resolution_passes(&root, diagnostics.clone());
+    let mut db = Db::new(diagnostics.clone());
+    run_resolution_passes(&root, &mut db);
     assert!(diagnostics.eprint(&map));
 }
 
@@ -29,7 +31,9 @@ pub fn check_types(input: &str, expect: Expect) {
     assert!(diagnostics.eprint(&map));
 
     let root = parser.parse_root();
-    let db = run_resolution_passes(&root, diagnostics.clone());
+
+    let mut db = Db::new(diagnostics.clone());
+    run_resolution_passes(&root, &mut db);
     assert!(diagnostics.eprint(&map));
 
     let mut actual = String::new();
@@ -38,7 +42,10 @@ pub fn check_types(input: &str, expect: Expect) {
     for (id, ty) in binding_types {
         let binding = &db.bindings[id];
         let ident = &binding.ident;
-        actual.push_str(&format!("{ident}: {}\n", ty.pretty(&db.types_map.items)));
+        actual.push_str(&format!(
+            "{ident}: {}\n",
+            ty.pretty(&db.types_map.items_by_id)
+        ));
     }
 
     expect.assert_eq(actual.trim());
@@ -54,7 +61,8 @@ pub fn check_fail(input: &str, expect: Expect) {
     assert!(diagnostics.eprint(&map));
 
     let root = parser.parse_root();
-    run_resolution_passes(&root, diagnostics.clone());
+    let mut db = Db::new(diagnostics.clone());
+    run_resolution_passes(&root, &mut db);
 
     let mut buf = Vec::new();
     diagnostics.write(&map, buf.by_ref());

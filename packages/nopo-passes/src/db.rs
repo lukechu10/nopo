@@ -3,21 +3,27 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use la_arena::{Arena, ArenaMap, Idx};
 use nopo_diagnostics::span::{Span, Spanned};
 use nopo_diagnostics::Diagnostics;
 use nopo_parser::ast::{
-    DataConstructor, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, Param, Pattern, Type, TypeId,
-    TypeParam,
+    DataConstructor, Expr, Ident, IdentExpr, LambdaParam, LetExpr, LetItem, MacroExpr, Param,
+    Pattern, RecordFieldExpr, Type, TypeId, TypeItem, TypeParam,
 };
 use smol_str::SmolStr;
 
 use crate::map::NodeMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Db {
     pub bindings: Arena<Binding>,
+    pub data_defs: Arena<DataDef>,
+
+    // `CollectModules`
+    /// Mapping from import expressions to the canonical path of the module.
+    pub module_imports_map: NodeMap<MacroExpr, PathBuf>,
 
     // `ResolveSymbols`
     /// Mapping from identifiers/let-items/let-exprs etc. to their bindings.
@@ -29,12 +35,33 @@ pub struct Db {
     /// Contains the type of all the bindings.
     pub binding_types_map: HashMap<BindingId, ResolvedType>,
 
+    // `TypeCheckRecords`
+    /// Map from identifiers to the field position in the record.
+    pub record_field_map: NodeMap<Expr, u32>,
+    /// Map from record field expressions to the field position in the record.
+    pub record_expr_field_map: NodeMap<RecordFieldExpr, u32>,
+
+    // `GenModuleTypes`
+    /// Map from module (specified by a path) to the type of the module.
+    pub module_types_map: HashMap<PathBuf, RecordSymbol>,
+
     pub diagnostics: Diagnostics,
 }
 
 impl Db {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(diagnostics: Diagnostics) -> Self {
+        Self {
+            data_defs: Arena::default(),
+            bindings: Arena::default(),
+            module_imports_map: NodeMap::default(),
+            bindings_map: BindingsMap::default(),
+            types_map: TypesMap::default(),
+            binding_types_map: HashMap::default(),
+            record_field_map: NodeMap::default(),
+            record_expr_field_map: NodeMap::default(),
+            module_types_map: HashMap::default(),
+            diagnostics,
+        }
     }
 }
 
@@ -95,8 +122,14 @@ pub enum TypeSymbol {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedType {
-    Ident(TypeId),
+    /// Type of a data-definition. This can be either an ADT or a record.
+    /// Holds the definition site of the data type.
+    Data(TypeId),
+    /// Type of a tuple.
     Tuple(Vec<Self>),
+    /// Modules have special types because they are only inhabited by the value of the module
+    /// itself. It is also impossible to explicitly refer to a module type.
+    Module(PathBuf),
     Fn {
         arg: Box<Self>,
         ret: Box<Self>,
@@ -193,12 +226,12 @@ impl ResolvedType {
             .iter()
             .map(|param| Self::Var(param.ident.as_ref().clone().into()))
             .collect::<Vec<_>>();
-        Self::new_curried_constructed_ty(Self::Ident(id), &ty_params)
+        Self::new_curried_constructed_ty(Self::Data(id), &ty_params)
     }
 
     pub fn ident_of_constructed(&self) -> Option<TypeId> {
         match self {
-            Self::Ident(id) => Some(*id),
+            Self::Data(id) => Some(*id),
             Self::Constructed {
                 constructor,
                 arg: _,
@@ -228,7 +261,7 @@ pub struct ResolvedTypePretty<'a>(&'a ResolvedType, &'a ArenaMap<TypeId, DataDef
 impl fmt::Display for ResolvedTypePretty<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
-            ResolvedType::Ident(id) => write!(f, "{}", self.1[*id].ident)?,
+            ResolvedType::Data(id) => write!(f, "{}", self.1[*id].ident)?,
             ResolvedType::Tuple(types) => {
                 write!(f, "(")?;
                 if let Some(first) = types.first() {
@@ -239,6 +272,7 @@ impl fmt::Display for ResolvedTypePretty<'_> {
                 }
                 write!(f, ")")?;
             }
+            ResolvedType::Module(path) => write!(f, "module {{{path:?}}}")?,
             ResolvedType::Fn { arg, ret } => {
                 write!(f, "({} -> {})", arg.pretty(self.1), ret.pretty(self.1))?
             }
@@ -292,14 +326,18 @@ impl TypeKind {
         }
     }
 }
-#[derive(Debug)]
+
+#[derive(Debug, Clone)]
 pub struct RecordSymbol {
-    pub fields: HashMap<Ident, ResolvedType>,
+    /// A map from the identifier to the resolved type and the position of the field in the record.
+    pub fields: HashMap<Ident, (ResolvedType, u32)>,
 }
+
 #[derive(Debug)]
 pub struct AdtSymbol {
     pub variants: Vec<AdtVariant>,
 }
+
 #[derive(Debug)]
 pub struct AdtVariant {
     pub ident: Ident,
@@ -308,7 +346,9 @@ pub struct AdtVariant {
 
 #[derive(Debug, Default)]
 pub struct TypesMap {
-    pub items: ArenaMap<TypeId, DataDef>,
+    // #[deprecated]
+    pub items_by_id: ArenaMap<TypeId, DataDef>,
+    pub items: NodeMap<TypeItem, DataDef>,
     pub types: NodeMap<Type, ResolvedType>,
 }
 

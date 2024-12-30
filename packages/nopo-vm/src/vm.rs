@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use crate::print::print_chunk;
 use crate::types::{ChunkBuilder, Instr, ObjClosure, ObjProto, Object, UpValue, Value, ValueArray};
 
 #[derive(Debug)]

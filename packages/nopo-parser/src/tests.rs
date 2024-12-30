@@ -150,8 +150,6 @@ type list 'a = Nil | Cons of 'a (list 'a)
                         Idx::<TypeItem>>(0),
                     ),
                 ],
-                mod_items: [],
-                use_items: [],
             }
         "#]],
     );

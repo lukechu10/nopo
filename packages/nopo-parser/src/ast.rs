@@ -24,8 +24,6 @@ pub struct Root {
     pub type_items: Arena<Spanned<TypeItem>>,
     /// The order of the items. This is used for variable scoping.
     pub items: Vec<ItemId>,
-    pub mod_items: Vec<Spanned<ModItem>>,
-    pub use_items: Vec<Spanned<UseItem>>,
 }
 
 /// Attributes can be attached to an item.
@@ -172,6 +170,8 @@ pub enum Expr {
 
     Let(Spanned<LetExpr>),
 
+    Macro(Spanned<MacroExpr>),
+
     Err,
 }
 
@@ -294,6 +294,12 @@ pub struct LetExpr {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct MacroExpr {
+    pub ident: Spanned<Ident>,
+    pub expr: Box<Spanned<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Pattern {
     Path(Spanned<Path>),
     Adt(Spanned<AdtPattern>),
@@ -338,6 +344,15 @@ impl From<Ident> for SmolStr {
         match value {
             Ident::Ok(str) => str,
             Ident::Err => "".into(),
+        }
+    }
+}
+
+impl PartialEq<str> for Ident {
+    fn eq(&self, other: &str) -> bool {
+        match self {
+            Ident::Ok(str) => str == other,
+            Ident::Err => false,
         }
     }
 }
