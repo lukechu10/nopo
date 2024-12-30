@@ -166,11 +166,13 @@ pub fn collect_module_graph(entry: &Path, db: &mut Db) -> Result<ModuleGraph, Co
 /// Should only be run if there are no errors in `db`.
 pub fn run_resolution_passes(root: &Root, db: &mut Db) {
     assert!(db.diagnostics.is_empty());
+
     let mut resolve = ResolveSymbols::new(db);
     resolve.visit_root(root);
     if !db.diagnostics.is_empty() {
         return;
     }
+
     let mut unify = UnifyTypes::new(db);
     unify.visit_root(root);
     if !db.diagnostics.is_empty() {

@@ -9,9 +9,15 @@ use nopo_parser::visitor::{walk_root, Visitor};
 
 use crate::db::{Db, RecordSymbol, ResolvedType};
 
+/// A pass for generating an unique type for every module.
+///
+/// Writes the generated type to the [`Db`] struct indexed by the module path.
 pub struct GenModuleType<'a> {
+    /// The resulting type of the moduke.
     ty: RecordSymbol,
+    /// Counter used for indices of the fields in the resulting record type.
     counter: u32,
+    /// The path of the module file.
     path: PathBuf,
     db: &'a mut Db,
 }
@@ -28,6 +34,8 @@ impl<'a> GenModuleType<'a> {
         }
     }
 
+    /// Add a new symbol to be exported from the module. Write down the symbol identifier and
+    /// type.
     fn add_symbol(&mut self, ident: Ident, ty: ResolvedType) {
         self.ty.fields.insert(ident, (ty, self.counter));
         self.counter += 1;
@@ -47,6 +55,7 @@ impl Visitor for GenModuleType<'_> {
         if *item.vis == Vis::Pub {
             self.add_symbol(item.ident.as_ref().clone(), ResolvedType::Data(idx));
 
+            // If the item is a ADT, add all the data constructors as exported symbols.
             if let TypeDef::Adt(record_def) = &*item.def {
                 for data_constructor in &record_def.data_constructors {
                     let binding = &self.db.bindings_map.data_constructors[data_constructor];
